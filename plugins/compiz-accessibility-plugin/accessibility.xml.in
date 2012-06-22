@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<compiz>
+    <plugin name="accessibility" useBcop="true">
+        <_short>Accessibility</_short>
+        <_long>Activate compatibility with accessibility layer.</_long>
+        <category>Accessibility</category>
+        <deps>
+            <relation type="after">
+                <plugin>opengl</plugin>
+                <plugin>composite</plugin>
+                <plugin>decor</plugin>
+            </relation>	
+        </deps>
+        <options>
+        </options>		
+    </plugin>
+</compiz>

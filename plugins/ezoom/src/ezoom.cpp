@@ -604,6 +604,12 @@ EZoomScreen::enableMousePolling ()
     mouse = MousePoller::getCurrentPosition ();
 }
 
+void
+EZoomScreen::enableAccessibility ()
+{
+    ;
+}
+
 /* Sets the zoom (or scale) level.
  * Cleans up if we are suddenly zoomed out.
  */
@@ -1745,8 +1751,11 @@ EZoomScreen::focusTrack (XEvent *event)
 void
 EZoomScreen::handleEvent (XEvent *event)
 {
+    XMotionEvent *mev;
+
     switch (event->type) {
 	case MotionNotify:
+	    mev =  (XMotionEvent *) event;
 	    if (grabIndex)
 	    {
 	        if (pointerX < clickPos.x ())
@@ -1788,6 +1797,62 @@ EZoomScreen::handleEvent (XEvent *event)
     }
 
     screen->handleEvent (event);
+}
+
+void
+EZoomScreen::handleAccessibilityEvent (AccessibilityEvent *event)
+{
+    AccessibleObject *object = event->getAccessibleObject ();
+    
+    compLogMessage ("EZoom", CompLogLevelInfo,
+                    "event->type: %s\n", event->getType());
+
+    if (object->is (Component))
+    {
+        
+        AccessibilityComponent::Ptr ac = 
+            boost::static_pointer_cast<AccessibilityComponent>
+            (object->getEntity (Component));
+
+        CompRect rect = ac->getExtents ();
+
+        compLogMessage ("Ezoom", CompLogLevelInfo,
+                        "ensureVisibilityArea [%d, %d] [%d, %d]\n",
+                        rect.x1(), rect.y1(), rect.x2(), rect.y2());
+
+        if (optionGetZoomMode () == EzoomOptions::ZoomModePanArea)
+        {
+            ensureVisibilityArea (rect.x1(),
+                                  rect.y1(),
+                                  rect.x2(),
+                                  rect.y2(),
+                                  optionGetRestrainMargin (),
+                                  NORTHWEST);
+        }
+    }
+
+    if (object->is (Text))
+    {
+        AccessibilityText::Ptr at = 
+            boost::static_pointer_cast<AccessibilityText>
+            (object->getEntity (Text));
+
+        CompRect rect = at->getCharacterExtents (at->getCaretOffset ());
+
+        compLogMessage ("Ezoom", CompLogLevelInfo,
+                        "TEXT - [%d, %d] [%d, %d]\n",
+                        rect.x1(), rect.y1(), rect.x2(), rect.y2());
+
+        if (optionGetZoomMode () == EzoomOptions::ZoomModePanArea)
+        {
+            ensureVisibilityArea (rect.x1(),
+                                  rect.y1(),
+                                  rect.x2(),
+                                  rect.y2(),
+                                  optionGetRestrainMargin (),
+                                  NORTHWEST);
+        }
+    }
 }
 
 /* TODO: Use this ctor carefully */
@@ -1866,6 +1931,12 @@ EZoomScreen::EZoomScreen (CompScreen *screen) :
     pollHandle.setCallback (boost::bind (
 				&EZoomScreen::updateMouseInterval, this, _1));
 
+    a11yHandle = new Accessibility();
+    a11yHandle->registerEventHandler ("object:state-changed", boost::bind (
+                        &EZoomScreen::handleAccessibilityEvent, this, _1));
+    a11yHandle->registerEventHandler ("object:text-changed", boost::bind (
+                        &EZoomScreen::handleAccessibilityEvent, this, _1));
+
     optionSetZoomInButtonInitiate (boost::bind (&EZoomScreen::zoomIn, this, _1,
 						_2, _3));
     optionSetZoomOutButtonInitiate (boost::bind (&EZoomScreen::zoomOut, this, _1,
@@ -1925,6 +1996,9 @@ EZoomScreen::~EZoomScreen ()
 
     if (pollHandle.active ())
 	pollHandle.stop ();
+
+    if (a11yHandle->active ())
+    a11yHandle->unregisterAll ();
 
     if (zooms.size ())
 	zooms.clear ();

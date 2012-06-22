@@ -44,6 +44,7 @@
 #include <composite/composite.h>
 #include <opengl/opengl.h>
 #include <mousepoll/mousepoll.h>
+#include <accessibility/accessibility.h>
 
 
 #include "ezoom_options.h"
@@ -184,6 +185,8 @@ class EZoomScreen :
 
 	MousePoller		 pollHandle; // mouse poller object
 
+    Accessibility    *a11yHandle; // Accessibility object
+
      private:
 
 	bool fixesSupported;
@@ -211,6 +214,9 @@ class EZoomScreen :
 
 	void
 	handleEvent (XEvent *);
+
+    void
+    handleAccessibilityEvent (AccessibilityEvent *event);
 
     public:
 
@@ -249,6 +255,9 @@ class EZoomScreen :
 
 	void
 	enableMousePolling ();
+
+    void
+    enableAccessibility ();
 
 	void
 	setScale (int out, float value);
