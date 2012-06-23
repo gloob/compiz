@@ -145,10 +145,7 @@ AccessibleObject::getEntity (IfaceType type)
 
 
 AccessibilityEntity::AccessibilityEntity (AtspiAccessible *object)
-{
-    compLogMessage ("Accessibility", CompLogLevelInfo,
-                    "AccessibilityEntity::AccessibilityEntity (%s)\n", object->name);
-	
+{	
     obj = object;
 }
 
