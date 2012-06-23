@@ -38,7 +38,8 @@ AccessibleObject::create (AtspiAccessible *object)
 
     int len = (int) ifaces->len;
 
-    for (int i = 0; i < len; i++) {
+    for (int i = 0; i < len; i++)
+    {
 
         char *iface = (char *) g_array_index (ifaces, gchar *, i);
 
@@ -58,7 +59,8 @@ AccessibleObject::instantiate (AtspiAccessible *object, IfaceType iface)
 {
     AccessibilityEntity::Ptr entity;
     
-    switch (iface) {
+    switch (iface)
+    {
 
         case Component:
             entity = AccessibilityEntity::Ptr (new AccessibilityComponent (object));
@@ -175,19 +177,19 @@ AccessibilityEntity::is ()
 AccessibilityEntity *
 AccessibilityEntity::clone () const
 {
-	return new AccessibilityEntity (obj);
+    return new AccessibilityEntity (obj);
 }
 
 AtspiAccessible *
 AccessibilityEntity::getObject () {
-	return obj;
+    return obj;
 }
 
 
 AccessibilityComponent::AccessibilityComponent (AtspiAccessible *obj) :
     AccessibilityEntity (obj)
 {
-	compLogMessage ("Accessibility", CompLogLevelInfo,
+    compLogMessage ("Accessibility", CompLogLevelInfo,
                     "AccessibilityComponent::AccessibilityComponent (%s)\n", obj->name);
 	
     component = atspi_accessible_get_component (obj);
@@ -196,7 +198,7 @@ AccessibilityComponent::AccessibilityComponent (AtspiAccessible *obj) :
 AccessibilityComponent *
 AccessibilityComponent::clone () const
 {
-	return new AccessibilityComponent (obj);
+    return new AccessibilityComponent (obj);
 }
 
 CompRect
@@ -262,7 +264,7 @@ AccessibilityComponent::is ()
 AccessibilityText::AccessibilityText (AtspiAccessible *obj) :
     AccessibilityEntity (obj)
 {
-	compLogMessage ("Accessibility", CompLogLevelInfo,
+    compLogMessage ("Accessibility", CompLogLevelInfo,
                     "AccessibilityText::AccessibilityText (%s)\n", obj->name);
 	
     text = atspi_accessible_get_text (obj);
@@ -271,7 +273,7 @@ AccessibilityText::AccessibilityText (AtspiAccessible *obj) :
 AccessibilityText *
 AccessibilityText::clone () const
 {
-	return new AccessibilityText (obj);
+    return new AccessibilityText (obj);
 }
 
 CompRect
