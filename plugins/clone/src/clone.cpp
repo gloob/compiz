@@ -295,9 +295,6 @@ CloneScreen::glPaintOutput (const GLScreenPaintAttrib &attrib,
 			 0.0f);
 	sTransform.scale (zoomX, zoomY, 1.0f);
 
-	glPushMatrix ();
-	glLoadMatrixf (sTransform.getMatrix ());
-
 	filter = gScreen->textureFilter ();
 
 	if (offset == 0.0f)
@@ -325,8 +322,6 @@ CloneScreen::glPaintOutput (const GLScreenPaintAttrib &attrib,
 	}
 
 	gScreen->setTextureFilter (filter);
-
-	glPopMatrix ();
     }
 
     return status;
@@ -376,7 +371,7 @@ CloneScreen::initiate (CompAction         *action,
         }
         else
         {
-	    it++;
+	    ++it;
         }
     }
 
@@ -533,7 +528,7 @@ CloneScreen::outputChangeNotify ()
 {
     std::list <Clone *>::iterator it;
 
-    for (it = clones.begin (); it != clones.end (); it++)
+    for (it = clones.begin (); it != clones.end (); ++it)
     {
 	if ((unsigned int) (*it)->dst >= screen->outputDevs ().size () ||
 	    (unsigned int) (*it)->src >= screen->outputDevs ().size ())

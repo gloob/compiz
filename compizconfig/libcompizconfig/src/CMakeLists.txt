@@ -15,6 +15,7 @@ set (LIBCOMPIZCONFIG_FILES
     iniparser.h
     lists.c
     main.c
+    log.c
 )
 
 add_definitions (
@@ -35,6 +36,9 @@ if (HAVE_PROTOBUF)
 	 ${LIBCOMPIZCONFIG_FILES}
 	 ${CMAKE_CURRENT_BINARY_DIR}/compizconfig.pb.cc
 	)
+    set (LIBCOMPIZCONFIG_LIBRARIES
+	 ${LIBCOMPIZCONFIG_LIBRARIES}
+	 protobuf)
     add_definitions (
 	    -DUSE_PROTOBUF
     )
@@ -45,6 +49,11 @@ if (HAVE_INOTIFY)
 	    -DHAVE_SYS_INOTIFY_H
     )
 endif (HAVE_INOTIFY)
+
+add_library (
+    ccs_settings_upgrade_internal STATIC
+    ccs_settings_upgrade_internal.c
+)
 
 add_library (
     compizconfig SHARED
@@ -61,7 +70,19 @@ link_directories (
 )
 
 target_link_libraries (
-    compizconfig ${LIBCOMPIZCONFIG_LIBRARIES} m
+    compizconfig
+    ${LIBCOMPIZCONFIG_LIBRARIES}
+    m
+    dl
+    ccs_settings_upgrade_internal
+)
+
+#
+# Tell CMake that targets using compizconfig should NOT re-import the
+# libraries that compizconfig depends on (contains).
+#
+set_target_properties (compizconfig PROPERTIES
+		       LINK_INTERFACE_LIBRARIES ""
 )
 
 set (COMPIZCONFIG_LIBS "")

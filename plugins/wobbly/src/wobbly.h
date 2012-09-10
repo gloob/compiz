@@ -41,7 +41,7 @@
 			  CompWindowTypeMenuMask    | \
 			  CompWindowTypeUtilMask)
 
-#define GRID_WIDTH  4
+#define GRID_WIDTH 4
 #define GRID_HEIGHT 4
 
 #define MODEL_MAX_SPRINGS (GRID_WIDTH * GRID_HEIGHT * 2)
@@ -288,7 +288,6 @@ public:
     void glAddGeometry (const GLTexture::MatrixList &,
 			const CompRegion &, const CompRegion &,
 			unsigned int = MAXSHORT, unsigned int = MAXSHORT);
-    void glDrawGeometry ();
 
     WobblyScreen     *wScreen;
     CompWindow       *window;

@@ -28,7 +28,12 @@
 const gchar *
 get_frame_type (WnckWindow *win)
 {
-    WnckWindowType wnck_type = wnck_window_get_window_type (win);
+    WnckWindowType wnck_type;
+
+    if (win == NULL)
+	return "bare";
+
+    wnck_type  = wnck_window_get_window_type (win);
 
     switch (wnck_type)
     {
@@ -40,11 +45,18 @@ get_frame_type (WnckWindow *win)
 	    int		  result, format;
 	    unsigned long n, left;
 	    unsigned char *data;
+	    Window        xid = wnck_window_get_xid (win);
 
-	    result = XGetWindowProperty (gdk_x11_get_default_xdisplay (), wnck_window_get_xid (win),
+	    if (xid == None)
+		return "bare";
+
+	    gdk_error_trap_push ();
+	    result = XGetWindowProperty (gdk_x11_get_default_xdisplay (), xid,
 					 net_wm_state_atom,
 					 0L, 1024L, FALSE, XA_ATOM, &actual, &format,
 					 &n, &left, &data);
+	    gdk_flush ();
+	    gdk_error_trap_pop ();
 
 	    if (result == Success && data)
 	    {
@@ -171,7 +183,10 @@ decorations_changed (WnckScreen *screen)
     gdkdisplay = gdk_display_get_default ();
     gdkscreen  = gdk_display_get_default_screen (gdkdisplay);
 
-    gwd_frames_foreach (set_frames_scales, (gpointer) settings->font);
+    const gchar *titlebar_font = NULL;
+    g_object_get (settings, "titlebar-font", &titlebar_font, NULL);
+
+    gwd_frames_foreach (set_frames_scales, (gpointer) titlebar_font);
 
     update_titlebar_font ();
     gwd_process_frames (update_frames_border_extents,
@@ -580,6 +595,13 @@ connect_window (WnckWindow *win)
 }
 
 static void
+set_context_if_decorated (decor_t *d, decor_context_t *context)
+{
+    if (d->decorated)
+	d->context = context;
+}
+
+static void
 active_window_changed (WnckScreen *screen)
 {
     WnckWindow *win;
@@ -601,12 +623,12 @@ active_window_changed (WnckScreen *screen)
 		{
 		   if (d->active)
 		   {
-		       d->context = &frame->max_window_context_active;
+		       set_context_if_decorated (d, &frame->max_window_context_active);
 		       d->shadow  = frame->max_border_shadow_active;
 		   }
 		   else
 		   {
-		       d->context = &frame->max_window_context_inactive;
+		       set_context_if_decorated (d, &frame->max_window_context_inactive);
 		       d->shadow  = frame->max_border_shadow_inactive;
 		   }
                 }
@@ -621,12 +643,12 @@ active_window_changed (WnckScreen *screen)
 	       {
 		   if (d->active)
 		   {
-		       d->context = &frame->window_context_active;
+		       set_context_if_decorated (d, &frame->window_context_active);
 		       d->shadow  = frame->border_shadow_active;
 		   }
 		   else
 		   {
-		       d->context = &frame->window_context_inactive;
+		       set_context_if_decorated (d, &frame->window_context_inactive);
 		       d->shadow  = frame->border_shadow_inactive;
 		   }
 	       }
@@ -670,12 +692,12 @@ active_window_changed (WnckScreen *screen)
 		{
 		   if (d->active)
 		   {
-		       d->context = &frame->max_window_context_active;
+		       set_context_if_decorated (d, &frame->max_window_context_active);
 		       d->shadow  = frame->max_border_shadow_active;
 		   }
 		   else
 		   {
-		       d->context = &frame->max_window_context_inactive;
+		       set_context_if_decorated (d, &frame->max_window_context_inactive);
 		       d->shadow  = frame->max_border_shadow_inactive;
 		   }
 		}
@@ -690,12 +712,12 @@ active_window_changed (WnckScreen *screen)
 		{
 		   if (d->active)
 		   {
-		       d->context = &frame->window_context_active;
+		       set_context_if_decorated (d, &frame->window_context_active);
 		       d->shadow  = frame->border_shadow_active;
 		   }
 		   else
 		   {
-		       d->context = &frame->window_context_inactive;
+		       set_context_if_decorated (d, &frame->window_context_inactive);
 		       d->shadow  = frame->border_shadow_inactive;
 		   }
 		}

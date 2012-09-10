@@ -7,10 +7,21 @@ set (CMAKE_MODULE_PATH_ORIG ${CMAKE_MODULE_PATH})
 set (COMPIZ_CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${COMPIZ_CMAKE_MODULE_PATH})
 
+include (CTest)
+
+set (MEMORYCHECK_COMMAND_OPTIONS --trace-children=yes)
+set (MEMORYCHECK_SUPPRESSIONS_FILE ${CMAKE_SOURCE_DIR}/tests/experimental-memcheck/compiz.supp CACHE FILEPATH "" FORCE)
+
+include (Dart)
+
 # Common compiz CMake macros & functions.
 include (CompizCommon)
 # Packaging-specific CMake macros & functions.
 include (CompizPackage)
+
+# GSettings schema recompilation
+include (CompizGSettings)
+
 include (cmake/base.cmake)
 # Check if specific function is present in library.
 include (CheckFunctionExists)
@@ -66,11 +77,17 @@ set (compiz_sharedir ${datadir}/compiz/)
 set (compiz_metadatadir ${datadir}/compiz)
 set (COMPIZ_I18N_DIR ${CMAKE_SOURCE_DIR}/po)
 
+# Don't allow subdirectories to add schema recompile rule
+set_property (GLOBAL
+	      PROPERTY GSETTINGS_LOCAL_COMPILE_INHIBIT_RULE
+	      TRUE)
+set_property (GLOBAL
+	      PROPERTY COMPIZ_INHIBIT_ADD_INSTALL_RECOMPILE_RULE
+	      TRUE)
+
 # Translation
 set (ALL_LINGUAS af ar bg bn bn_IN bs ca cs cy da de el en_GB en_US es eu et fi fr gl gu he hi hr hu id it ja ka km ko lo lt mk mr nb nl or pa pl pt pt_BR ro ru sk sl sr sv ta tr uk vi xh zh_CN zh_TW zu)
 set (GETTEXT_PACKAGE compiz)
-
-find_package (Boost 1.34.0 REQUIRED serialization)
 
 set (COMPIZ_REQUIRES
     x11
@@ -96,11 +113,7 @@ set (DECORATION_REQUIRES xrender)
 compiz_pkg_check_modules (COMPIZ REQUIRED ${COMPIZ_REQUIRES})
 compiz_pkg_check_modules (LIBDECORATION REQUIRED ${DECORATION_REQUIRES})
 
-list (APPEND COMPIZ_LIBRARIES ${Boost_LIBRARIES})
-
 include (CompizDefaults)
-
-set (COMPIZ_CFLAGS "${COMPIZ_CFLAGS} -I${Boost_INCLUDE_DIR}")
 
 set (_compiz_package_string "Compiz ${VERSION}")
 set (_compiz_package "Compiz")
@@ -119,41 +132,49 @@ install (
     DESTINATION ${libdir}/pkgconfig
 )
 
-# Build Google Test and make its headers known
-find_package (GTest)
+if (COMPIZ_BUILD_TESTING)
 
-if (NOT GTEST_FOUND)
+    # Build Google Test and make its headers known
+    find_package (GTest)
 
-    # Check for google test and build it locally
-    set (GTEST_ROOT_DIR
-	"/usr/src/gtest" # Default value, adjustable by user with e.g., ccmake
-	CACHE
-	PATH
-	"Path to Google test srcs"
-    )
+    if (NOT GTEST_FOUND)
 
-    find_path (GTEST_INCLUDE_DIR gtest/gtest.h)
+	# Check for google test and build it locally
+	set (GTEST_ROOT_DIR
+	     "/usr/src/gtest" # Default value, adjustable by user with e.g., ccmake
+	     CACHE
+	     PATH
+	     "Path to Google Test srcs"
+	     FORCE
+	)
 
-    if (GTEST_INCLUDE_DIR)
-	#FIXME - hardcoded is bad!
-	add_subdirectory (${GTEST_ROOT_DIR}
-		      gtest)
-    endif(GTEST_INCLUDE_DIR)
+	find_path (GTEST_INCLUDE_DIR gtest/gtest.h)
 
-    set (GTEST_BOTH_LIBRARIES gtest gtest_main)
-    set (GTEST_FOUND TRUE)
+	if (GTEST_INCLUDE_DIR)
+	    add_subdirectory (${GTEST_ROOT_DIR}
+			     gtest)
+	endif (GTEST_INCLUDE_DIR)
 
-endif (NOT GTEST_FOUND)
+	set (GTEST_BOTH_LIBRARIES gtest gtest_main)
+	set (GTEST_FOUND TRUE)
 
-find_library (GMOCK_LIBRARY gmock)
-find_library (GMOCK_MAIN_LIBRARY gmock_main)
+    endif (NOT GTEST_FOUND)
 
-if (NOT GMOCK_LIBRARY OR NOT GMOCK_MAIN_LIBRARY OR NOT GTEST_FOUND)
-  message ("Google Mock and Google Test not found - cannot build tests!")
-  set (COMPIZ_BUILD_TESTING OFF)
-endif (NOT GMOCK_LIBRARY OR NOT GMOCK_MAIN_LIBRARY OR NOT GTEST_FOUND)
+    find_library (GMOCK_LIBRARY gmock)
+    find_library (GMOCK_MAIN_LIBRARY gmock_main)
 
-include_directories (${GTEST_INCLUDE_DIRS})
+    if (NOT GMOCK_LIBRARY OR NOT GMOCK_MAIN_LIBRARY OR NOT GTEST_FOUND)
+
+	message ("Google Mock and Google Test not found - cannot build tests!")
+	set (COMPIZ_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+
+    else (NOT GMOCK_LIBRARY OR NOT GMOCK_MAIN_LIBRARY OR NOT GTEST_FOUND)
+
+	include_directories (${GTEST_INCLUDE_DIRS})
+
+    endif (NOT GMOCK_LIBRARY OR NOT GMOCK_MAIN_LIBRARY OR NOT GTEST_FOUND)
+
+endif (COMPIZ_BUILD_TESTING)
 
 find_package (Threads REQUIRED)
 
@@ -172,6 +193,13 @@ add_subdirectory (xslt)
 add_subdirectory (plugins)
 add_subdirectory (tests)
 
+# Leave last - the cmake_install.cmake script is guarunteed
+# to run in a single job, and we need to force GSettings
+# schema recompilation to happen after all other install
+# targets (there is no way to set install target dependencies)
+# in CMake
+add_subdirectory (postinst)
+
 compiz_ensure_linkage ()
 compiz_package_generation ("Compiz")
 compiz_add_uninstall ()
@@ -180,11 +208,15 @@ compiz_add_distcheck ()
 compiz_add_release ()
 compiz_add_release_signoff ()
 
+if (COMPIZ_BUILD_TESTING)
+    compiz_generate_testfile_target ()
+endif (COMPIZ_BUILD_TESTING)
+
 _print_configure_results ()
 
 _check_compiz_cmake_macro (${CMAKE_MODULE_PATH_ORIG})
 
 # Enable coverage reporting for compiz
-enable_coverage_report()
+compiz_generate_coverage_report()
 
 

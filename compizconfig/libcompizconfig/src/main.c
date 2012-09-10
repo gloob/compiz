@@ -38,6 +38,207 @@
 
 #include "ccs-private.h"
 #include "iniparser.h"
+#include "ccs_settings_upgrade_internal.h"
+
+static void * wrapRealloc (void *o, void *a , size_t b)
+{
+    return realloc (a, b);
+}
+
+static void * wrapMalloc (void *o, size_t a)
+{
+    return malloc (a);
+}
+
+static void * wrapCalloc (void *o, size_t a, size_t b)
+{
+    return calloc (a, b);
+}
+
+static void wrapFree (void *o, void *a)
+{
+    free (a);
+}
+
+CCSObjectAllocationInterface ccsDefaultObjectAllocator =
+{
+    wrapRealloc,
+    wrapMalloc,
+    wrapCalloc,
+    wrapFree,
+    NULL
+};
+
+/* CCSObject stuff */
+Bool
+ccsObjectInit_(CCSObject *object, CCSObjectAllocationInterface *object_allocation)
+{
+    object->priv = NULL;
+    object->n_interfaces = 0;
+    object->n_allocated_interfaces = 0;
+    object->interfaces = NULL;
+    object->interface_types = NULL;
+    object->object_allocation = object_allocation;
+    object->refcnt = 0;
+
+    return TRUE;
+}
+
+Bool
+ccsObjectAddInterface_(CCSObject *object, const CCSInterface *interface, int interface_type)
+{
+    object->n_interfaces++;
+
+    if (object->n_allocated_interfaces < object->n_interfaces)
+    {
+	unsigned int old_allocated_interfaces = object->n_allocated_interfaces;
+	object->n_allocated_interfaces = object->n_interfaces;
+	CCSInterface **ifaces = (*object->object_allocation->realloc_) (object->object_allocation->allocator, object->interfaces, object->n_allocated_interfaces * sizeof (CCSInterface *));
+	int          *iface_types = (*object->object_allocation->realloc_) (object->object_allocation->allocator, object->interface_types, object->n_allocated_interfaces * sizeof (int));
+
+	if (!ifaces || !iface_types)
+	{
+	    if (ifaces)
+		(*object->object_allocation->free_) (object->object_allocation->allocator, ifaces);
+
+	    if (iface_types)
+		(*object->object_allocation->free_) (object->object_allocation->allocator, iface_types);
+
+	    object->n_interfaces--;
+	    object->n_allocated_interfaces = old_allocated_interfaces;
+	    return FALSE;
+	}
+	else
+	{
+	    object->interfaces = (const CCSInterface **) ifaces;
+	    object->interface_types = iface_types;
+	}
+    }
+
+    object->interfaces[object->n_interfaces - 1] = interface;
+    object->interface_types[object->n_interfaces - 1] = interface_type;
+
+    return TRUE;
+}
+
+Bool
+ccsObjectRemoveInterface_(CCSObject *object, int interface_type)
+{
+    unsigned int i = 0;
+
+    if (!object->n_interfaces)
+	return FALSE;
+
+    const CCSInterface **o = object->interfaces;
+    int        *type = object->interface_types;
+
+    for (; i < object->n_interfaces; i++, o++, type++)
+    {
+	if (object->interface_types[i] == interface_type)
+	    break;
+    }
+
+    if (i >= object->n_interfaces)
+	return FALSE;
+
+    /* Now clear this section and move everything back */
+    object->interfaces[i] = NULL;
+
+    i++;
+
+    const CCSInterface **oLast = o;
+    int *typeLast = type;
+
+    o++;
+    type++;
+
+    memmove ((void *) oLast, (void *)o, (object->n_interfaces - i) * sizeof (CCSInterface *));
+    memmove ((void *) typeLast, (void *) type, (object->n_interfaces - i) * sizeof (int));
+
+    object->n_interfaces--;
+
+    if (!object->n_interfaces)
+    {
+	free (object->interfaces);
+	free (object->interface_types);
+	object->interfaces = NULL;
+	object->interface_types = NULL;
+	object->n_allocated_interfaces = 0;
+    }
+
+    return TRUE;
+}
+
+const CCSInterface *
+ccsObjectGetInterface_(CCSObject *object, int interface_type)
+{
+    unsigned int i = 0;
+
+    for (; i < object->n_interfaces; i++)
+    {
+	if (object->interface_types[i] == interface_type)
+	    return object->interfaces[i];
+    }
+
+    return NULL;
+}
+
+CCSPrivate *
+ccsObjectGetPrivate_(CCSObject *object)
+{
+    return object->priv;
+}
+
+void
+ccsObjectSetPrivate_(CCSObject *object, CCSPrivate *priv)
+{
+    object->priv = priv;
+}
+
+void
+ccsObjectFinalize_(CCSObject *object)
+{
+    if (object->priv)
+    {
+	(*object->object_allocation->free_) (object->object_allocation->allocator, object->priv);
+	object->priv = NULL;
+    }
+
+    if (object->interfaces)
+    {
+	(*object->object_allocation->free_) (object->object_allocation->allocator, object->interfaces);
+	object->interfaces = NULL;
+    }
+
+    if (object->interface_types)
+    {
+	(*object->object_allocation->free_) (object->object_allocation->allocator, object->interface_types);
+	object->interface_types = NULL;
+    }
+
+    object->n_interfaces = 0;
+}
+
+unsigned int
+ccsAllocateType ()
+{
+    static unsigned int start = 0;
+
+    start++;
+
+    return start;
+}
+
+INTERFACE_TYPE (CCSContextInterface)
+INTERFACE_TYPE (CCSPluginInterface)
+INTERFACE_TYPE (CCSSettingInterface)
+INTERFACE_TYPE (CCSBackendInterface);
+INTERFACE_TYPE (CCSDynamicBackendInterface);
+INTERFACE_TYPE (CCSIntegrationInterface);
+INTERFACE_TYPE (CCSIntegratedSettingInfoInterface);
+INTERFACE_TYPE (CCSIntegratedSettingInterface);
+INTERFACE_TYPE (CCSIntegratedSettingsStorageInterface);
+INTERFACE_TYPE (CCSIntegratedSettingFactoryInterface);
 
 Bool basicMetadata = FALSE;
 
@@ -46,7 +247,6 @@ ccsSetBasicMetadata (Bool value)
 {
     basicMetadata = value;
 }
-
 static void
 initGeneralOptions (CCSContext * context)
 {
@@ -95,37 +295,198 @@ configChangeNotify (unsigned int watchId, void *closure)
 }
 
 CCSContext *
-ccsEmptyContextNew (unsigned int screenNum)
+ccsEmptyContextNew (unsigned int screenNum, const CCSInterfaceTable *object_interfaces)
 {
     CCSContext *context;
 
     context = calloc (1, sizeof (CCSContext));
+
     if (!context)
 	return NULL;
 
-    context->ccsPrivate = calloc (1, sizeof (CCSContextPrivate));
-    if (!context->ccsPrivate)
+    ccsObjectInit (context, &ccsDefaultObjectAllocator);
+
+    CCSContextPrivate *ccsPrivate = calloc (1, sizeof (CCSContextPrivate));
+    if (!ccsPrivate)
     {
 	free (context);
 	return NULL;
     }
 
-    CONTEXT_PRIV (context);
+    ccsObjectSetPrivate (context, (CCSPrivate *) ccsPrivate);
 
-    context->screenNum = screenNum;
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    cPrivate->object_interfaces = object_interfaces;
+    cPrivate->screenNum = screenNum;
+
+    ccsObjectAddInterface (context, (CCSInterface *) object_interfaces->contextInterface, GET_INTERFACE_TYPE (CCSContextInterface));
 
     initGeneralOptions (context);
     cPrivate->configWatchId = ccsAddConfigWatch (context, configChangeNotify);
 
     if (cPrivate->backend)
-	D (D_NORMAL, "Backend     : %s\n", cPrivate->backend->vTable->name);
-	D (D_NORMAL, "Integration : %s\n", cPrivate->deIntegration ? "true" : "false");
-	D (D_NORMAL, "Profile     : %s\n",
-	    (cPrivate->profile && strlen (cPrivate->profile)) ?
-	    cPrivate->profile : "default");
+	ccsInfo ("Backend     : %s", ccsDynamicBackendGetBackendName (cPrivate->backend));
+
+    ccsInfo ("Integration : %s", cPrivate->deIntegration ? "true" : "false");
+    ccsInfo ("Profile     : %s",
+	(cPrivate->profile && strlen (cPrivate->profile)) ?
+	cPrivate->profile : "default");
 
     return context;
 }
+
+static void *
+ccsContextGetPrivatePtrDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    return cPrivate->privatePtr;
+}
+
+static void
+ccsContextSetPrivatePtrDefault (CCSContext *context, void *ptr)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    cPrivate->privatePtr = ptr;
+}
+
+static CCSPluginList
+ccsContextGetPluginsDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    return cPrivate->plugins;
+}
+
+static CCSPluginCategory *
+ccsContextGetCategoriesDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    return cPrivate->categories;
+}
+
+static CCSSettingList
+ccsContextGetChangedSettingsDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    return cPrivate->changedSettings;
+}
+
+static unsigned int
+ccsContextGetScreenNumDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    return cPrivate->screenNum;
+}
+
+static Bool
+ccsContextAddChangedSettingDefault (CCSContext *context, CCSSetting *setting)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    cPrivate->changedSettings = ccsSettingListAppend (cPrivate->changedSettings, setting);
+
+    return TRUE;
+}
+
+static Bool
+ccsContextClearChangedSettingsDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    cPrivate->changedSettings = ccsSettingListFree (cPrivate->changedSettings, FALSE);
+
+    return TRUE;
+}
+
+static CCSSettingList
+ccsContextStealChangedSettingsDefault (CCSContext *context)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    CCSSettingList l = cPrivate->changedSettings;
+
+    cPrivate->changedSettings = NULL;
+    return l;
+}
+
+CCSPluginList
+ccsContextGetPlugins (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetPlugins) (context);
+}
+
+CCSPluginCategory *
+ccsContextGetCategories (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetCategories) (context);
+}
+
+CCSSettingList
+ccsContextGetChangedSettings (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetChangedSettings) (context);
+}
+
+unsigned int
+ccsContextGetScreenNum (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetScreenNum) (context);
+}
+
+Bool
+ccsContextAddChangedSetting (CCSContext *context, CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextAddChangedSetting) (context, setting);
+}
+
+Bool
+ccsContextClearChangedSettings (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextClearChangedSettings) (context);
+}
+
+CCSSettingList
+ccsContextStealChangedSettings (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextStealChangedSettings) (context);
+}
+
+void *
+ccsContextGetPrivatePtr (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetPrivatePtr) (context);
+}
+
+void
+ccsContextSetPrivatePtr (CCSContext *context, void *ptr)
+{
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextSetPrivatePtr) (context, ptr);
+}
+
+void *
+ccsContextGetPluginsBindable (CCSContext *context)
+{
+    return (void *) ccsContextGetPlugins (context);
+}
+
+void *
+ccsContextStealChangedSettingsBindable (CCSContext *context)
+{
+    return (void *) ccsContextStealChangedSettings (context);
+}
+
+void *
+ccsContextGetChangedSettingsBindable (CCSContext *context)
+{
+    return (void *) ccsContextGetChangedSettings (context);
+}
+
 
 static void
 ccsSetActivePluginList (CCSContext * context, CCSStringList list)
@@ -133,9 +494,11 @@ ccsSetActivePluginList (CCSContext * context, CCSStringList list)
     CCSPluginList l;
     CCSPlugin     *plugin;
 
-    for (l = context->plugins; l; l = l->next)
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    for (l = cPrivate->plugins; l; l = l->next)
     {
-	PLUGIN_PRIV (l->data);
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, l->data);
 	pPrivate->active = FALSE;
     }
 
@@ -145,7 +508,7 @@ ccsSetActivePluginList (CCSContext * context, CCSStringList list)
 
 	if (plugin)
 	{
-	    PLUGIN_PRIV (plugin);
+	    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 	    pPrivate->active = TRUE;
 	}
     }
@@ -154,16 +517,16 @@ ccsSetActivePluginList (CCSContext * context, CCSStringList list)
     plugin = ccsFindPlugin (context, "core");
     if (plugin)
     {
-	PLUGIN_PRIV (plugin);
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 	pPrivate->active = TRUE;
     }
 }
 
 CCSContext *
-ccsContextNew (unsigned int screenNum)
+ccsContextNew (unsigned int screenNum, const CCSInterfaceTable *iface)
 {
     CCSPlugin  *p;
-    CCSContext *context = ccsEmptyContextNew (screenNum);
+    CCSContext *context = ccsEmptyContextNew (screenNum, iface);
     if (!context)
 	return NULL;
 
@@ -197,15 +560,17 @@ ccsContextNew (unsigned int screenNum)
 }
 
 CCSPlugin *
-ccsFindPlugin (CCSContext * context, const char *name)
+ccsFindPluginDefault (CCSContext * context, const char *name)
 {
     if (!name)
 	name = "";
 
-    CCSPluginList l = context->plugins;
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    CCSPluginList l = cPrivate->plugins;
     while (l)
     {
-	if (!strcmp (l->data->name, name))
+	if (!strcmp (ccsPluginGetName (l->data), name))
 	    return l->data;
 
 	l = l->next;
@@ -214,13 +579,19 @@ ccsFindPlugin (CCSContext * context, const char *name)
     return NULL;
 }
 
+CCSPlugin *
+ccsFindPlugin (CCSContext *context, const char *name)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextFindPlugin) (context, name);
+}
+
 CCSSetting *
-ccsFindSetting (CCSPlugin * plugin, const char *name)
+ccsFindSettingDefault (CCSPlugin * plugin, const char *name)
 {
     if (!plugin)
 	return NULL;
 
-    PLUGIN_PRIV (plugin);
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
     if (!name)
 	name = "";
@@ -232,7 +603,7 @@ ccsFindSetting (CCSPlugin * plugin, const char *name)
 
     while (l)
     {
-	if (!strcmp (l->data->name, name))
+	if (!strcmp (ccsSettingGetName (l->data), name))
 	    return l->data;
 
 	l = l->next;
@@ -241,8 +612,17 @@ ccsFindSetting (CCSPlugin * plugin, const char *name)
     return NULL;
 }
 
+CCSSetting *
+ccsFindSetting (CCSPlugin *plugin, const char *name)
+{
+    if (!plugin)
+	return NULL;
+
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginFindSetting) (plugin, name);
+}
+
 Bool
-ccsPluginIsActive (CCSContext * context, char *name)
+ccsPluginIsActiveDefault (CCSContext * context, char *name)
 {
     CCSPlugin *plugin;
 
@@ -250,9 +630,15 @@ ccsPluginIsActive (CCSContext * context, char *name)
     if (!plugin)
 	return FALSE;
 
-    PLUGIN_PRIV (plugin);
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
     return pPrivate->active;
+}
+
+Bool
+ccsPluginIsActive (CCSContext *context, char *name)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextPluginIsActive) (context, name);
 }
 
 
@@ -264,7 +650,7 @@ subGroupAdd (CCSSetting * setting, CCSGroup * group)
 
     while (l)
     {
-	if (!strcmp (l->data->name, setting->subGroup))
+	if (!strcmp (l->data->name, ccsSettingGetSubGroup (setting)))
 	{
 	    l->data->settings = ccsSettingListAppend (l->data->settings,
 						      setting);
@@ -279,7 +665,7 @@ subGroupAdd (CCSSetting * setting, CCSGroup * group)
     if (subGroup)
     {
 	group->subGroups = ccsSubGroupListAppend (group->subGroups, subGroup);
-	subGroup->name = strdup (setting->subGroup);
+	subGroup->name = strdup (ccsSettingGetSubGroup (setting));
 	subGroup->settings = ccsSettingListAppend (subGroup->settings, setting);
     }
 }
@@ -292,7 +678,7 @@ groupAdd (CCSSetting * setting, CCSPluginPrivate * p)
 
     while (l)
     {
-	if (!strcmp (l->data->name, setting->group))
+	if (!strcmp (l->data->name, ccsSettingGetGroup (setting)))
 	{
 	    subGroupAdd (setting, l->data);
 	    return;
@@ -306,7 +692,7 @@ groupAdd (CCSSetting * setting, CCSPluginPrivate * p)
     {
 	group->refCount = 1;
     	p->groups = ccsGroupListAppend (p->groups, group);
-	group->name = strdup (setting->group);
+	group->name = strdup (ccsSettingGetGroup (setting));
 	subGroupAdd (setting, group);
     }
 }
@@ -324,12 +710,21 @@ collateGroups (CCSPluginPrivate * p)
 }
 
 void
-ccsFreeContext (CCSContext * c)
+ccsFreeContext (CCSContext *c)
 {
     if (!c)
 	return;
 
-    CONTEXT_PRIV (c);
+    (*(GET_INTERFACE (CCSContextInterface, c))->contextDestructor) (c);
+}
+
+static void
+ccsFreeContextDefault (CCSContext * c)
+{
+    if (!c)
+	return;
+
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, c);
 
     if (cPrivate->profile)
 	free (cPrivate->profile);
@@ -337,38 +732,45 @@ ccsFreeContext (CCSContext * c)
     if (cPrivate->configWatchId)
 	ccsRemoveFileWatch (cPrivate->configWatchId);
 
-    if (c->changedSettings)
-	ccsSettingListFree (c->changedSettings, FALSE);
+    if (cPrivate->changedSettings)
+	cPrivate->changedSettings = ccsSettingListFree (cPrivate->changedSettings, FALSE);
 
-    if (c->ccsPrivate)
-	free (c->ccsPrivate);
+    ccsPluginListFree (cPrivate->plugins, TRUE);
 
-    ccsPluginListFree (c->plugins, TRUE);
-
+    ccsObjectFinalize (c);
     free (c);
 }
 
 void
-ccsFreePlugin (CCSPlugin * p)
+ccsFreePlugin (CCSPlugin *p)
 {
     if (!p)
 	return;
 
-    free (p->name);
-    free (p->shortDesc);
-    free (p->longDesc);
-    free (p->hints);
-    free (p->category);
+    (*(GET_INTERFACE (CCSPluginInterface, p))->pluginDestructor) (p);
+}
 
-    ccsStringListFree (p->loadAfter, TRUE);
-    ccsStringListFree (p->loadBefore, TRUE);
-    ccsStringListFree (p->requiresPlugin, TRUE);
-    ccsStringListFree (p->conflictPlugin, TRUE);
-    ccsStringListFree (p->conflictFeature, TRUE);
-    ccsStringListFree (p->providesFeature, TRUE);
-    ccsStringListFree (p->requiresFeature, TRUE);
+static void
+ccsFreePluginDefault (CCSPlugin * p)
+{
+    if (!p)
+	return;
 
-    PLUGIN_PRIV (p);
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, p);
+
+    free (pPrivate->name);
+    free (pPrivate->shortDesc);
+    free (pPrivate->longDesc);
+    free (pPrivate->hints);
+    free (pPrivate->category);
+
+    ccsStringListFree (pPrivate->loadAfter, TRUE);
+    ccsStringListFree (pPrivate->loadBefore, TRUE);
+    ccsStringListFree (pPrivate->requiresPlugin, TRUE);
+    ccsStringListFree (pPrivate->conflictPlugin, TRUE);
+    ccsStringListFree (pPrivate->conflictFeature, TRUE);
+    ccsStringListFree (pPrivate->providesFeature, TRUE);
+    ccsStringListFree (pPrivate->requiresFeature, TRUE);
 
     ccsSettingListFree (pPrivate->settings, TRUE);
     ccsGroupListFree (pPrivate->groups, TRUE);
@@ -385,8 +787,50 @@ ccsFreePlugin (CCSPlugin * p)
 	free (pPrivate->pbFilePath);
 #endif
 
-    free (pPrivate);
+    ccsObjectFinalize (p);
     free (p);
+}
+
+static void
+ccsFreeSettingDefault (CCSSetting *s)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, s);
+
+    free (sPrivate->name);
+    free (sPrivate->shortDesc);
+    free (sPrivate->longDesc);
+    free (sPrivate->group);
+    free (sPrivate->subGroup);
+    free (sPrivate->hints);
+
+    switch (sPrivate->type)
+    {
+    case TypeInt:
+	ccsIntDescListFree (sPrivate->info.forInt.desc, TRUE);
+	break;
+    case TypeString:
+	ccsStrRestrictionListFree (sPrivate->info.forString.restriction, TRUE);
+	break;
+    case TypeList:
+	if (sPrivate->info.forList.listType == TypeInt)
+	    ccsIntDescListFree (sPrivate->info.forList.listInfo->
+				forInt.desc, TRUE);
+	free (sPrivate->info.forList.listInfo);
+	//ccsSettingValueListFree (sPrivate->value->value.asList, TRUE);
+	break;
+    default:
+	break;
+    }
+
+    if (&sPrivate->defaultValue != sPrivate->value)
+    {
+	ccsFreeSettingValue (sPrivate->value);
+    }
+
+    ccsFreeSettingValue (&sPrivate->defaultValue);
+
+    ccsObjectFinalize (s);
+    free (s);
 }
 
 void
@@ -395,39 +839,7 @@ ccsFreeSetting (CCSSetting * s)
     if (!s)
 	return;
 
-    free (s->name);
-    free (s->shortDesc);
-    free (s->longDesc);
-    free (s->group);
-    free (s->subGroup);
-    free (s->hints);
-
-    switch (s->type)
-    {
-    case TypeInt:
-	ccsIntDescListFree (s->info.forInt.desc, TRUE);
-	break;
-    case TypeString:
-	ccsStrRestrictionListFree (s->info.forString.restriction, TRUE);
-	break;
-    case TypeList:
-	if (s->info.forList.listType == TypeInt)
-	    ccsIntDescListFree (s->info.forList.listInfo->
-				forInt.desc, TRUE);
-	free (s->info.forList.listInfo);
-	//ccsSettingValueListFree (s->value->value.asList, TRUE);
-	break;
-    default:
-	break;
-    }
-
-    if (&s->defaultValue != s->value)
-    {
-	ccsFreeSettingValue (s->value);
-    }
-
-    ccsFreeSettingValue (&s->defaultValue);
-    free (s);
+    (*(GET_INTERFACE (CCSSettingInterface, s))->settingDestructor) (s);
 }
 
 void
@@ -452,20 +864,10 @@ ccsFreeSubGroup (CCSSubGroup * s)
     free (s);
 }
 
-void
-ccsFreeSettingValue (CCSSettingValue * v)
+static void
+ccsFreeSettingValueCommon (CCSSettingValue *v,
+			   CCSSettingType  type)
 {
-    if (!v)
-	return;
-
-    if (!v->parent)
-	return;
-
-    CCSSettingType type = v->parent->type;
-
-    if (v->isListChild)
-	type = v->parent->info.forList.listType;
-
     switch (type)
     {
     case TypeString:
@@ -481,9 +883,38 @@ ccsFreeSettingValue (CCSSettingValue * v)
     default:
 	break;
     }
+}
 
-    if (v != &v->parent->defaultValue)
+void
+ccsFreeSettingValue (CCSSettingValue * v)
+{
+    if (!v)
+	return;
+
+    if (!v->parent)
+    {
+	ccsError ("cannot free value without parent - use ccsFreeSettingValueWithType and specify type instead");
+	return;
+    }
+
+    CCSSettingType type = ccsSettingGetType (v->parent);
+
+    if (v->isListChild)
+	type = ccsSettingGetInfo (v->parent)->forList.listType;
+
+    ccsFreeSettingValueCommon (v, type);
+
+    if (v != ccsSettingGetDefaultValue (v->parent))
 	free (v);
+}
+
+void
+ccsFreeSettingValueWithType (CCSSettingValue *v,
+			     CCSSettingType  type)
+{
+    ccsFreeSettingValueCommon (v, type);
+
+    free (v);
 }
 
 void
@@ -499,20 +930,47 @@ ccsFreePluginConflict (CCSPluginConflict * c)
     free (c);
 }
 
-void
-ccsFreeBackendInfo (CCSBackendInfo * b)
+CCSBackendInfo *
+ccsCopyBackendInfoFromBackend (CCSBackend *backend,
+			       const CCSBackendInterface *interface)
 {
-    if (!b)
-	return;
+    const CCSBackendInfo *backendInfo = (*interface->backendGetInfo) (backend);
 
+    if (!backendInfo)
+	return NULL;
+
+    CCSBackendInfo *info = calloc (1, sizeof (CCSBackendInfo));
+
+    if (!info)
+	return NULL;
+
+    memcpy (info, backendInfo, sizeof (CCSBackendInfo));
+
+    /* This is an abuse here -
+     * in order to minimize code duplication ccsGetBackendInfo returns
+     * const static data, but when we're dealing with the copies we're
+     * dealing with heap allocated memory, since you can't access the
+     * const data in the case that the libraries are not open.
+     * Thus the cast. */
+
+    info->name = (const char *) strdup (backendInfo->name);
+    info->shortDesc = (const char *) strdup (backendInfo->shortDesc);
+    info->longDesc = (const char *) strdup (backendInfo->longDesc);
+
+    return info;
+}
+
+void
+ccsFreeBackendInfo (CCSBackendInfo *b)
+{
     if (b->name)
-	free (b->name);
+	free ((char *) b->name);
 
     if (b->shortDesc)
-	free (b->shortDesc);
+	free ((char *) b->shortDesc);
 
     if (b->longDesc)
-	free (b->longDesc);
+	free ((char *) b->longDesc);
 
     free (b);
 }
@@ -568,20 +1026,6 @@ ccsFreeString (CCSString *str)
     free (str);
 }
 
-#define CCSREF(type,dtype) \
-	void ccs##type##Ref (dtype *d)  \
-	{ \
-	    d->refCount++; \
-	} \
-	void ccs##type##Unref (dtype *d) \
-	{ \
-	    d->refCount--; \
-	    if (d->refCount == 0) \
-		ccsFree##type (d); \
-	} \
-
-CCSREF (Plugin, CCSPlugin)
-CCSREF (Setting, CCSSetting)
 CCSREF (String, CCSString)
 CCSREF (Group, CCSGroup)
 CCSREF (SubGroup, CCSSubGroup)
@@ -592,8 +1036,18 @@ CCSREF (IntDesc, CCSIntDesc)
 CCSREF (StrRestriction, CCSStrRestriction)
 CCSREF (StrExtension, CCSStrExtension)
 
+CCSREF_OBJ (Plugin, CCSPlugin)
+CCSREF_OBJ (Setting, CCSSetting)
+CCSREF_OBJ (Backend, CCSBackend)
+CCSREF_OBJ (DynamicBackend, CCSDynamicBackend)
+CCSREF_OBJ (Integration, CCSIntegration)
+CCSREF_OBJ (IntegratedSetting, CCSIntegratedSetting);
+CCSREF_OBJ (IntegratedSettingInfo, CCSIntegratedSettingInfo);
+CCSREF_OBJ (IntegratedSettingFactory, CCSIntegratedSettingFactory);
+CCSREF_OBJ (IntegratedSettingsStorage, CCSIntegratedSettingsStorage);
+
 static void *
-openBackend (char *backend)
+openBackend (const char *backend)
 {
     char *home = getenv ("HOME");
     char *override_backend = getenv ("LIBCOMPIZCONFIG_BACKEND_PATH");
@@ -614,6 +1068,9 @@ openBackend (char *backend)
 
     if (!dlhand && home && strlen (home))
     {
+	if (dlname)
+	    free (dlname);
+
 	if (asprintf (&dlname, "%s/.compizconfig/backends/lib%s.so",
 		      home, backend) == -1)
 	    dlname = NULL;
@@ -625,9 +1082,9 @@ openBackend (char *backend)
 
     if (!dlhand)
     {
-        if (dlname) {
-	        free (dlname);
-        }
+	if (dlname)
+	    free (dlname);
+
 	if (asprintf (&dlname, "%s/compizconfig/backends/lib%s.so",
 		      LIBDIR, backend) == -1)
 	    dlname = NULL;
@@ -639,69 +1096,159 @@ openBackend (char *backend)
 
     if (err)
     {
-	fprintf (stderr, "libcompizconfig: dlopen: %s\n", err);
+	ccsError ("dlopen: %s", err);
     }
 
     return dlhand;
 }
 
-Bool
-ccsSetBackend (CCSContext * context, char *name)
+void
+ccsFreeBackend (CCSBackend *backend)
 {
-    Bool fallbackMode = FALSE;
-    CONTEXT_PRIV (context);
+    ccsBackendFini (backend);
+    ccsObjectFinalize (backend);
+    free (backend);
+}
 
-    if (cPrivate->backend)
+void
+ccsFreeDynamicBackend (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    ccsBackendUnref (dbPrivate->backend);
+
+    if (dbPrivate->dlhand)
+	dlclose (dbPrivate->dlhand);
+
+    ccsObjectFinalize (backend);
+    free (backend);
+}
+
+CCSBackend *
+ccsBackendNewWithDynamicInterface (CCSContext *context, const CCSBackendInterface *interface)
+{
+    CCSBackend *backend = calloc (1, sizeof (CCSBackend));
+
+    ccsObjectInit (backend, &ccsDefaultObjectAllocator);
+    ccsBackendRef (backend);
+
+    ccsObjectAddInterface (backend, (CCSInterface *) interface, GET_INTERFACE_TYPE (CCSBackendInterface));
+
+    return backend;
+}
+
+CCSDynamicBackend *
+ccsDynamicBackendWrapLoadedBackend (const CCSInterfaceTable *interfaces, CCSBackend *backend, void *dlhand)
+{
+    CCSDynamicBackend *dynamicBackend = calloc (1, sizeof (CCSDynamicBackend));
+    CCSDynamicBackendPrivate *dbPrivate = NULL;
+
+    if (!dynamicBackend)
+	return NULL;
+
+    ccsObjectInit (dynamicBackend, &ccsDefaultObjectAllocator);
+    ccsDynamicBackendRef (dynamicBackend);
+
+    dbPrivate = calloc (1, sizeof (CCSDynamicBackendPrivate));
+
+    if (!dbPrivate)
     {
-	/* no action needed if the backend is the same */
-
-	if (strcmp (cPrivate->backend->vTable->name, name) == 0)
-	    return TRUE;
-
-	if (cPrivate->backend->vTable->backendFini)
-	    cPrivate->backend->vTable->backendFini (context);
-
-	dlclose (cPrivate->backend->dlhand);
-	free (cPrivate->backend);
-	cPrivate->backend = NULL;
+	ccsDynamicBackendUnref (dynamicBackend);
+	return NULL;
     }
 
+    dbPrivate->dlhand = dlhand;
+    dbPrivate->backend = backend;
+
+    ccsObjectSetPrivate (dynamicBackend, (CCSPrivate *) dbPrivate);
+    ccsObjectAddInterface (dynamicBackend, (CCSInterface *) interfaces->dynamicBackendWrapperInterface, GET_INTERFACE_TYPE (CCSBackendInterface));
+    ccsObjectAddInterface (dynamicBackend, (CCSInterface *) interfaces->dynamicBackendInterface, GET_INTERFACE_TYPE (CCSDynamicBackendInterface));
+
+    return dynamicBackend;
+}
+
+CCSBackend *
+ccsOpenBackend (const CCSInterfaceTable *interfaces, CCSContext *context, const char *name)
+{
+    CCSBackendInterface *vt;
     void *dlhand = openBackend (name);
-    if (!dlhand)
-    {
-	fallbackMode = TRUE;
-	name = "ini";
-	dlhand = openBackend (name);
-    }
 
     if (!dlhand)
-	return FALSE;
+	return NULL;
 
     BackendGetInfoProc getInfo = dlsym (dlhand, "getBackendInfo");
     if (!getInfo)
     {
 	dlclose (dlhand);
-	return FALSE;
+	return NULL;
     }
 
-    CCSBackendVTable *vt = getInfo ();
+    vt = getInfo ();
     if (!vt)
     {
 	dlclose (dlhand);
-	return FALSE;
+	return NULL;
     }
 
-    cPrivate->backend = calloc (1, sizeof (CCSBackend));
-    if (!cPrivate->backend)
+    CCSBackend *backend = ccsBackendNewWithDynamicInterface (context, vt);
+
+    if (!backend)
     {
 	dlclose (dlhand);
-	return FALSE;
+	return NULL;
     }
-    cPrivate->backend->dlhand = dlhand;
-    cPrivate->backend->vTable = vt;
 
-    if (cPrivate->backend->vTable->backendInit)
-	cPrivate->backend->vTable->backendInit (context);
+    CCSDynamicBackend *backendWrapper = ccsDynamicBackendWrapLoadedBackend (interfaces, backend, dlhand);
+
+    if (!backendWrapper)
+    {
+	dlclose (dlhand);
+	ccsBackendUnref (backend);
+	return NULL;
+    }
+
+    return (CCSBackend *) backendWrapper;
+}
+
+Bool
+ccsSetBackendDefault (CCSContext * context, char *name)
+{
+    Bool fallbackMode = FALSE;
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    if (cPrivate->backend)
+    {
+	/* no action needed if the backend is the same */
+
+	if (strcmp (ccsDynamicBackendGetBackendName (cPrivate->backend), name) == 0)
+	    return TRUE;
+
+	ccsDynamicBackendUnref (cPrivate->backend);
+	cPrivate->backend = NULL;
+    }
+
+    CCSBackend *backend = ccsOpenBackend (cPrivate->object_interfaces, context, name);
+
+    if (!backend)
+    {
+	ccsWarning ("unable to open backend %s, falling back to ini", name);
+
+	backend = ccsOpenBackend (cPrivate->object_interfaces, context, "ini");
+	if (!backend)
+	{
+	    ccsError ("failed to open any backends, aborting");
+	    abort ();
+	}
+
+	fallbackMode = TRUE;
+    }
+
+    cPrivate->backend = (CCSDynamicBackend *) backend;
+
+    CCSBackendInitFunc backendInit = (GET_INTERFACE (CCSBackendInterface, cPrivate->backend))->backendInit;
+
+    if (backendInit)
+	(*backendInit) ((CCSBackend *) cPrivate->backend, context);
 
     ccsDisableFileWatch (cPrivate->configWatchId);
     if (!fallbackMode)
@@ -711,8 +1258,485 @@ ccsSetBackend (CCSContext * context, char *name)
     return TRUE;
 }
 
+Bool
+ccsSetBackend (CCSContext *context, char *name)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextSetBackend) (context, name);
+}
+
+CCSIntegratedSetting * ccsIntegrationGetIntegratedSetting (CCSIntegration *integration,
+							   const char *pluginName,
+							   const char *settingName)
+{
+    return (*(GET_INTERFACE (CCSIntegrationInterface, integration))->getIntegratedSetting) (integration, pluginName, settingName);
+}
+
+Bool ccsIntegrationReadOptionIntoSetting (CCSIntegration *integration,
+					  CCSContext		  *context,
+					  CCSSetting		  *setting,
+					  CCSIntegratedSetting *integratedSetting)
+{
+    return (*(GET_INTERFACE (CCSIntegrationInterface, integration))->readOptionIntoSetting) (integration, context, setting, integratedSetting);
+}
+
+void ccsIntegrationWriteSettingIntoOption (CCSIntegration *integration,
+					   CCSContext		   *context,
+					   CCSSetting		   *setting,
+					   CCSIntegratedSetting *integratedSetting)
+{
+    (*(GET_INTERFACE (CCSIntegrationInterface, integration))->writeSettingIntoOption) (integration, context, setting, integratedSetting);
+}
+
+void ccsIntegrationUpdateIntegratedSettings (CCSIntegration *integration,
+					     CCSContext	    *context,
+					     CCSIntegratedSettingList integratedSettings)
+{
+    (*(GET_INTERFACE (CCSIntegrationInterface, integration))->updateIntegratedSettings) (integration, context, integratedSettings);
+}
+
+void ccsIntegrationDisallowIntegratedWrites (CCSIntegration *integration)
+{
+    (*(GET_INTERFACE (CCSIntegrationInterface, integration))->disallowIntegratedWrites) (integration);
+}
+
+void ccsIntegrationAllowIntegratedWrites (CCSIntegration *integration)
+{
+    (*(GET_INTERFACE (CCSIntegrationInterface, integration))->allowIntegratedWrites) (integration);
+}
+
+void ccsFreeIntegration (CCSIntegration *integration)
+{
+    (*(GET_INTERFACE (CCSIntegrationInterface, integration))->freeIntegrationBackend) (integration);
+}
+
+static CCSIntegratedSetting *
+ccsNullIntegrationBackendGetIntegratedSetting (CCSIntegration *integration,
+					       const char	  *pluginName,
+					       const char	  *settingName)
+{
+    return NULL;
+}
 
 static Bool
+ccsNullIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
+						CCSContext	      *context,
+						CCSSetting	      *setting,
+						CCSIntegratedSetting  *integrated)
+{
+    return FALSE;
+}
+
+static void
+ccsNullIntegrationBackendWriteSettingIntoOption (CCSIntegration *integration,
+						 CCSContext	      *context,
+						 CCSSetting	      *setting,
+						 CCSIntegratedSetting *integrated)
+{
+}
+
+static void
+ccsNullIntegrationBackendUpdateIntegratedSettings (CCSIntegration *integration,
+						   CCSContext	  *context,
+						   CCSIntegratedSettingList settings)
+{
+}
+
+void
+ccsNullIntegrationBackendFree (CCSIntegration *integration)
+{
+    ccsObjectFinalize (integration);
+    (*integration->object.object_allocation->free_) (integration->object.object_allocation->allocator, integration);
+}
+
+const CCSIntegrationInterface ccsNullIntegrationBackendInterface =
+{
+    ccsNullIntegrationBackendGetIntegratedSetting,
+    ccsNullIntegrationBackendReadOptionIntoSetting,
+    ccsNullIntegrationBackendWriteSettingIntoOption,
+    ccsNullIntegrationBackendUpdateIntegratedSettings,
+    ccsNullIntegrationBackendFree
+};
+
+CCSIntegration *
+ccsNullIntegrationBackendNew (CCSObjectAllocationInterface *ai)
+{
+    CCSIntegration *integration = (*ai->calloc_) (ai->allocator, 1, sizeof (CCSIntegration));
+
+    if (!integration)
+	return NULL;
+
+    ccsObjectInit (integration, ai);
+    ccsObjectAddInterface (integration, (const CCSInterface *) &ccsNullIntegrationBackendInterface, GET_INTERFACE_TYPE (CCSIntegrationInterface));
+    return integration;
+}
+
+const CCSBackendInfo * ccsBackendGetInfo (CCSBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->backendGetInfo) (backend);
+}
+
+static Bool
+ccsDynamicBackendSupportsIntegrationDefault (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendGetInfo (dbPrivate->backend)->integrationSupport;
+}
+
+const char * ccsDynamicBackendGetBackendName (CCSDynamicBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSDynamicBackendInterface, backend))->getBackendName) (backend);
+}
+
+Bool ccsDynamicBackendSupportsRead (CCSDynamicBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSDynamicBackendInterface, backend))->supportsRead) (backend);
+}
+
+Bool ccsDynamicBackendSupportsWrite (CCSDynamicBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSDynamicBackendInterface, backend))->supportsWrite) (backend);
+}
+
+Bool ccsDynamicBackendSupportsProfiles (CCSDynamicBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSDynamicBackendInterface, backend))->supportsProfiles) (backend);
+}
+
+Bool ccsDynamicBackendSupportsIntegration (CCSDynamicBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSDynamicBackendInterface, backend))->supportsIntegration) (backend);
+}
+
+CCSBackend * ccsDynamicBackendGetRawBackend (CCSDynamicBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSDynamicBackendInterface, backend))->getRawBackend) (backend);
+}
+
+Bool ccsBackendHasExecuteEvents (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->executeEvents != NULL;
+}
+
+void ccsBackendExecuteEvents (CCSBackend *backend, unsigned int flags)
+{
+    (*(GET_INTERFACE (CCSBackendInterface, backend))->executeEvents) (backend, flags);
+}
+
+Bool ccsBackendInit (CCSBackend *backend, CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->backendInit) (backend, context);
+}
+
+Bool ccsBackendFini (CCSBackend *backend)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->backendFini) (backend);
+}
+
+static Bool ccsBackendHasReadInit (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->readInit != NULL;
+}
+
+Bool ccsBackendReadInit (CCSBackend *backend, CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->readInit) (backend, context);
+}
+
+static Bool ccsBackendHasReadSetting (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->readSetting != NULL;
+}
+
+void ccsBackendReadSetting (CCSBackend *backend, CCSContext *context, CCSSetting *setting)
+{
+    (*(GET_INTERFACE (CCSBackendInterface, backend))->readSetting) (backend, context, setting);
+}
+
+static Bool ccsBackendHasReadDone (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->readDone != NULL;
+}
+
+void ccsBackendReadDone (CCSBackend *backend, CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->readDone) (backend, context);
+}
+
+static Bool ccsBackendHasWriteInit (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->writeInit != NULL;
+}
+
+Bool ccsBackendWriteInit (CCSBackend *backend, CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->writeInit) (backend, context);
+}
+
+static Bool ccsBackendHasWriteSetting (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->writeSetting != NULL;
+}
+
+void ccsBackendWriteSetting (CCSBackend *backend, CCSContext *context, CCSSetting *setting)
+{
+    (*(GET_INTERFACE (CCSBackendInterface, backend))->writeSetting) (backend, context, setting);
+}
+
+static Bool ccsBackendHasWriteDone (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->writeDone != NULL;
+}
+
+void ccsBackendWriteDone (CCSBackend *backend, CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->writeDone) (backend, context);
+}
+
+static Bool ccsBackendHasUpdateSetting (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->updateSetting != NULL;
+}
+
+void ccsBackendUpdateSetting (CCSBackend *backend, CCSContext *context, CCSPlugin *plugin, CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->updateSetting) (backend, context, plugin, setting);
+}
+
+static Bool ccsBackendHasGetSettingIsIntegrated (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->getSettingIsIntegrated != NULL;
+}
+
+Bool ccsBackendGetSettingIsIntegrated (CCSBackend *backend, CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->getSettingIsIntegrated) (backend, setting);
+}
+
+static Bool ccsBackendHasGetSettingIsReadOnly (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->getSettingIsReadOnly != NULL;
+}
+
+Bool ccsBackendGetSettingIsReadOnly (CCSBackend *backend, CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->getSettingIsReadOnly) (backend, setting);
+}
+
+static Bool ccsBackendHasGetExistingProfiles (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->getExistingProfiles != NULL;
+}
+
+CCSStringList ccsBackendGetExistingProfiles (CCSBackend *backend, CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->getExistingProfiles) (backend, context);
+}
+
+static Bool ccsBackendHasDeleteProfile (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->deleteProfile != NULL;
+}
+
+Bool ccsBackendDeleteProfile (CCSBackend *backend, CCSContext *context, char *name)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->deleteProfile) (backend, context, name);
+}
+
+static Bool ccsBackendHasSetIntegration (CCSBackend *backend)
+{
+    return (GET_INTERFACE (CCSBackendInterface, backend))->setIntegration != NULL;
+}
+
+void ccsBackendSetIntegration (CCSBackend *backend, CCSIntegration *integration)
+{
+    return (*(GET_INTERFACE (CCSBackendInterface, backend))->setIntegration) (backend, integration);
+}
+
+static const char *
+ccsDynamicBackendGetBackendNameDefault (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendGetInfo (dbPrivate->backend)->name;
+}
+
+static Bool
+ccsDynamicBackendSupportsReadDefault (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendHasReadSetting (dbPrivate->backend);
+}
+
+static Bool
+ccsDynamicBackendSupportsWriteDefault (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendHasWriteSetting (dbPrivate->backend);
+}
+
+static Bool
+ccsDynamicBackendSupportsProfilesDefault (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendGetInfo (dbPrivate->backend)->profileSupport;
+
+}
+
+static CCSBackend * ccsDynamicBackendGetRawBackendDefault (CCSDynamicBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return dbPrivate->backend;
+}
+
+static const CCSBackendInfo * ccsDynamicBackendGetInfoWrapper (CCSBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendGetInfo (dbPrivate->backend);
+}
+
+static Bool ccsDynamicBackendInitWrapper (CCSBackend *backend, CCSContext *context)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendInit (dbPrivate->backend, context);
+}
+
+static Bool ccsDynamicBackendFiniWrapper (CCSBackend *backend)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    return ccsBackendFini (dbPrivate->backend);
+}
+
+static void ccsDynamicBackendExecuteEventsWrapper (CCSBackend *backend, unsigned int flags)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasExecuteEvents (dbPrivate->backend))
+	ccsBackendExecuteEvents (dbPrivate->backend, flags);
+}
+
+static Bool ccsDynamicBackendReadInitWrapper (CCSBackend *backend, CCSContext *context)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasReadInit (dbPrivate->backend))
+	return ccsBackendReadInit (dbPrivate->backend, context);
+
+    return TRUE;
+}
+
+static void ccsDynamicBackendReadSettingWrapper (CCSBackend *backend, CCSContext *context, CCSSetting *setting)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasReadSetting (dbPrivate->backend))
+	ccsBackendReadSetting (dbPrivate->backend, context, setting);
+}
+
+static void ccsDynamicBackendReadDoneWrapper (CCSBackend *backend, CCSContext *context)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasReadDone (dbPrivate->backend))
+	ccsBackendReadDone (dbPrivate->backend, context);
+}
+
+static Bool ccsDynamicBackendWriteInitWrapper (CCSBackend *backend, CCSContext *context)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasWriteInit (dbPrivate->backend))
+	return ccsBackendWriteInit (dbPrivate->backend, context);
+
+    return TRUE;
+}
+
+static void ccsDynamicBackendWriteSettingWrapper (CCSBackend *backend, CCSContext *context, CCSSetting *setting)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasWriteSetting (dbPrivate->backend))
+	ccsBackendWriteSetting (dbPrivate->backend, context, setting);
+}
+
+static void ccsDynamicBackendWriteDoneWrapper (CCSBackend *backend, CCSContext *context)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasWriteDone (dbPrivate->backend))
+	ccsBackendWriteDone (dbPrivate->backend, context);
+}
+
+static void ccsDynamicBackendUpdateSettingWrapper (CCSBackend *backend, CCSContext *context, CCSPlugin *plugin, CCSSetting *setting)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasUpdateSetting (dbPrivate->backend))
+	ccsBackendUpdateSetting (dbPrivate->backend, context, plugin, setting);
+}
+
+static Bool ccsDynamicBackendGetSettingIsIntegratedWrapper (CCSBackend *backend, CCSSetting *setting)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasGetSettingIsIntegrated (dbPrivate->backend) &&
+	ccsDynamicBackendSupportsIntegration ((CCSDynamicBackend *) backend))
+	return ccsBackendGetSettingIsIntegrated (dbPrivate->backend, setting);
+
+    return FALSE;
+}
+
+static Bool ccsDynamicBackendGetSettingIsReadOnlyWrapper (CCSBackend *backend, CCSSetting *setting)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasGetSettingIsReadOnly (dbPrivate->backend))
+	return ccsBackendGetSettingIsReadOnly (dbPrivate->backend, setting);
+
+    return FALSE;
+}
+
+static CCSStringList ccsDynamicBackendGetExistingProfilesWrapper (CCSBackend *backend, CCSContext *context)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasGetExistingProfiles (dbPrivate->backend) &&
+	ccsDynamicBackendSupportsProfiles ((CCSDynamicBackend *) backend))
+	return ccsBackendGetExistingProfiles (dbPrivate->backend, context);
+
+    static CCSStringList sl = NULL;
+
+    return sl;
+}
+
+static Bool ccsDynamicBackendDeleteProfileWrapper (CCSBackend *backend, CCSContext *context, char *profile)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasDeleteProfile (dbPrivate->backend) &&
+	ccsDynamicBackendSupportsProfiles ((CCSDynamicBackend *) backend))
+	return ccsBackendDeleteProfile (dbPrivate->backend, context, profile);
+
+    return FALSE;
+}
+
+static void ccsDynamicBackendSetIntegrationWrapper (CCSBackend *backend, CCSIntegration *integration)
+{
+    CCSDynamicBackendPrivate *dbPrivate = GET_PRIVATE (CCSDynamicBackendPrivate, backend);
+
+    if (ccsBackendHasSetIntegration (backend) &&
+	ccsDynamicBackendSupportsIntegration ((CCSDynamicBackend *) backend))
+	return ccsBackendSetIntegration (dbPrivate->backend, integration);
+}
+
+Bool
 ccsCompareLists (CCSSettingValueList l1, CCSSettingValueList l2,
 		 CCSSettingListInfo info)
 {
@@ -725,8 +1749,14 @@ ccsCompareLists (CCSSettingValueList l1, CCSSettingValueList l2,
 		return FALSE;
 	    break;
 	case TypeBool:
-	    if (l1->data->value.asBool != l2->data->value.asBool)
-		return FALSE;
+	    {
+		Bool bothTrue = (l1->data->value.asBool && l2->data->value.asBool);
+		Bool bothFalse = (!l1->data->value.asBool && !l2->data->value.asBool);
+
+		/* Use the boolean operators as TRUE/FALSE can be redefined */
+		if (!bothTrue && !bothFalse)
+		    return FALSE;
+	    }
 	    break;
 	case TypeFloat:
 	    if (l1->data->value.asFloat != l2->data->value.asFloat)
@@ -851,9 +1881,12 @@ copyInfo (CCSSettingInfo *from, CCSSettingInfo *to, CCSSettingType type)
 	}
 	case TypeList:
 	{
-	    to->forList.listInfo = calloc (1, sizeof (CCSSettingInfo));
-	    
-	    copyInfo (from->forList.listInfo, to->forList.listInfo, from->forList.listType);
+	    if (from->forList.listInfo)
+	    {
+		to->forList.listInfo = calloc (1, sizeof (CCSSettingInfo));
+
+		copyInfo (from->forList.listInfo, to->forList.listInfo, from->forList.listType);
+	    }
 
 	    break;
 	}
@@ -869,10 +1902,10 @@ static void
 copyValue (CCSSettingValue * from, CCSSettingValue * to)
 {
     memcpy (to, from, sizeof (CCSSettingValue));
-    CCSSettingType type = from->parent->type;
+    CCSSettingType type = ccsSettingGetType (from->parent);
 
     if (from->isListChild)
-	type = from->parent->info.forList.listType;
+	type = ccsSettingGetInfo (from->parent)->forList.listType;
 
     switch (type)
     {
@@ -903,43 +1936,62 @@ copyValue (CCSSettingValue * from, CCSSettingValue * to)
     }
 }
 
+/* TODO: CCSSetting is not meant to be copyable ... remove */
 static void
 copySetting (CCSSetting *from, CCSSetting *to)
-{    
-    memcpy (to, from, sizeof (CCSSetting));
+{
+    /* Allocate a new private ptr for the new setting */
+    CCSSettingPrivate *ccsPrivate = calloc (1, sizeof (CCSSettingPrivate));
 
-    if (from->name)
-	to->name = strdup (from->name);
-    if (from->shortDesc)
-	to->shortDesc = strdup (from->shortDesc);
-    if (from->longDesc)
-	to->longDesc = strdup (from->longDesc);
-    if (from->group)
-	to->group = strdup (from->group);
-    if (from->subGroup)
-	to->subGroup = strdup (from->subGroup);
-    if (from->hints)
-	to->hints = strdup (from->hints);
-    if (from->value)
+    ccsObjectSetPrivate (to, (CCSPrivate *) ccsPrivate);
+
+    unsigned int i = 0;
+
+    /* copy interfaces */
+    for (; i < from->object.n_interfaces; ++i)
+	ccsObjectAddInterface (to,
+			       from->object.interfaces[i],
+			       from->object.interface_types[i]);
+
+    CCSSettingPrivate *fromPrivate = (CCSSettingPrivate *) ccsObjectGetPrivate (from);
+    CCSSettingPrivate *toPrivate = (CCSSettingPrivate *) ccsObjectGetPrivate (to);
+
+    /* copy from fromPrivate to toPrivate for now, and replace all
+     * fields that should be replaced */
+    memcpy (toPrivate, fromPrivate, sizeof (CCSSettingPrivate));
+
+    if (fromPrivate->name)
+	toPrivate->name = strdup (fromPrivate->name);
+    if (fromPrivate->shortDesc)
+	toPrivate->shortDesc = strdup (fromPrivate->shortDesc);
+    if (fromPrivate->longDesc)
+	toPrivate->longDesc = strdup (fromPrivate->longDesc);
+    if (fromPrivate->group)
+	toPrivate->group = strdup (fromPrivate->group);
+    if (fromPrivate->subGroup)
+	toPrivate->subGroup = strdup (fromPrivate->subGroup);
+    if (fromPrivate->hints)
+	toPrivate->hints = strdup (fromPrivate->hints);
+    if (fromPrivate->value)
     {
-	to->value = malloc (sizeof (CCSSettingValue));
+	toPrivate->value = malloc (sizeof (CCSSettingValue));
 	
-	if (!from->value)
+	if (!fromPrivate->value)
 	    return;
 
-	copyValue (from->value, to->value);
+	copyValue (fromPrivate->value, toPrivate->value);
 
-	to->value->refCount = 1;	
-	to->value->parent = to;
+	toPrivate->value->refCount = 1;
+	toPrivate->value->parent = to;
     }
 
-    copyValue (&from->defaultValue, &to->defaultValue);
-    copyInfo (&from->info, &to->info, from->type);
+    copyValue (&fromPrivate->defaultValue, &toPrivate->defaultValue);
+    copyInfo (&fromPrivate->info, &toPrivate->info, fromPrivate->type);
 
-    to->defaultValue.parent = to;
-    to->privatePtr = NULL;
+    toPrivate->defaultValue.parent = to;
+    toPrivate->privatePtr = NULL;
     
-    to->refCount = 1;
+    ccsSettingRef (to);
 }
 
 static void
@@ -947,39 +1999,41 @@ copyFromDefault (CCSSetting * setting)
 {
     CCSSettingValue *value;
 
-    if (setting->value != &setting->defaultValue)
-	ccsFreeSettingValue (setting->value);
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->value != &sPrivate->defaultValue)
+	ccsFreeSettingValue (sPrivate->value);
 
     value = calloc (1, sizeof (CCSSettingValue));
     if (!value)
     {
-	setting->value = &setting->defaultValue;
-	setting->isDefault = TRUE;
+	sPrivate->value = &sPrivate->defaultValue;
+	sPrivate->isDefault = TRUE;
 	return;
     }
     
     value->refCount = 1;
 
-    copyValue (&setting->defaultValue, value);
-    setting->value = value;
-    setting->isDefault = FALSE;
+    copyValue (&sPrivate->defaultValue, value);
+    sPrivate->value = value;
+    sPrivate->isDefault = FALSE;
 }
 
 void
-ccsResetToDefault (CCSSetting * setting, Bool processChanged)
+ccsSettingResetToDefaultDefault (CCSSetting * setting, Bool processChanged)
 {
-    if (setting->value != &setting->defaultValue)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->value != &sPrivate->defaultValue)
     {
-	ccsFreeSettingValue (setting->value);
+	ccsFreeSettingValue (sPrivate->value);
 
 	if (processChanged)
-	    setting->parent->context->changedSettings =
-		ccsSettingListAppend (setting->parent->context->changedSettings,
-				       setting);
+	    ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
     }
 
-    setting->value = &setting->defaultValue;
-    setting->isDefault = TRUE;
+    sPrivate->value = &sPrivate->defaultValue;
+    sPrivate->isDefault = TRUE;
 }
 
 Bool
@@ -987,16 +2041,16 @@ ccsCheckValueEq (CCSSettingValue *rhs, CCSSettingValue *lhs)
 {
     CCSSettingType type;
 
-    if (rhs->parent->type != lhs->parent->type)
+    if (ccsSettingGetType (rhs->parent) != ccsSettingGetType (lhs->parent))
     {
-	D (D_FULL, "[WARNING] Attempted to check equality between mismatched types!\n");
+	ccsWarning ("Attempted to check equality between mismatched types!");
 	return FALSE;
     }
 
     if (rhs->isListChild)
-	type = rhs->parent->info.forList.listType;
+	type = ccsSettingGetInfo (rhs->parent)->forList.listType;
     else
-	type = rhs->parent->type;
+	type = ccsSettingGetType (rhs->parent);
     
     switch (type)
     {
@@ -1021,67 +2075,72 @@ ccsCheckValueEq (CCSSettingValue *rhs, CCSSettingValue *lhs)
 	case TypeBell:
 	    return lhs->value.asBell == rhs->value.asBell;
 	case TypeAction:
-	    D (D_FULL, "[WARNING] Actions are not comparable!\n");
+	    ccsWarning ("Actions are not comparable!");
 	    return FALSE;
 	case TypeList:
 	{
 	    return ccsCompareLists (lhs->value.asList, rhs->value.asList,
-				    lhs->parent->info.forList);
+				    ccsSettingGetInfo (lhs->parent)->forList);
 	
 	}
 	default:
 	    break;
     }
     
-    D (D_FULL, "[WARNING] Failed to process type %i\n", lhs->parent->type);
+    ccsWarning ("Failed to process type %i", ccsSettingGetType (lhs->parent));
     return FALSE;
 }
 
+/* FIXME: That's a lot of code for the sake of type switching ...
+ * maybe we need to switch to C++ here and use templates ... */
+
 Bool
-ccsSetInt (CCSSetting * setting, int data, Bool processChanged)
+ccsSettingSetIntDefault (CCSSetting * setting, int data, Bool processChanged)
 {
-    if (setting->type != TypeInt)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeInt)
 	return FALSE;
 
-    if (setting->isDefault && (setting->defaultValue.value.asInt == data))
+    if (sPrivate->isDefault && (sPrivate->defaultValue.value.asInt == data))
 	return TRUE;
 
-    if (!setting->isDefault && (setting->defaultValue.value.asInt == data))
+    if (!sPrivate->isDefault && (sPrivate->defaultValue.value.asInt == data))
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (setting->value->value.asInt == data)
+    if (sPrivate->value->value.asInt == data)
 	return TRUE;
 
-    if ((data < setting->info.forInt.min) ||
-	 (data > setting->info.forInt.max))
+    if ((data < sPrivate->info.forInt.min) ||
+	 (data > sPrivate->info.forInt.max))
 	return FALSE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asInt = data;
+    sPrivate->value->value.asInt = data;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetFloat (CCSSetting * setting, float data, Bool processChanged)
+ccsSettingSetFloatDefault (CCSSetting * setting, float data, Bool processChanged)
 {
-    if (setting->type != TypeFloat)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeFloat)
 	return FALSE;
 
-    if (setting->isDefault && (setting->defaultValue.value.asFloat == data))
+    if (sPrivate->isDefault && (sPrivate->defaultValue.value.asFloat == data))
 	return TRUE;
 
-    if (!setting->isDefault && (setting->defaultValue.value.asFloat == data))
+    if (!sPrivate->isDefault && (sPrivate->defaultValue.value.asFloat == data))
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
@@ -1089,313 +2148,311 @@ ccsSetFloat (CCSSetting * setting, float data, Bool processChanged)
 
     /* allow the values to differ a tiny bit because of
        possible rounding / precision issues */
-    if (fabs (setting->value->value.asFloat - data) < 1e-5)
+    if (fabs (sPrivate->value->value.asFloat - data) < 1e-5)
 	return TRUE;
 
-    if ((data < setting->info.forFloat.min) ||
-	 (data > setting->info.forFloat.max))
+    if ((data < sPrivate->info.forFloat.min) ||
+	 (data > sPrivate->info.forFloat.max))
 	return FALSE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asFloat = data;
+    sPrivate->value->value.asFloat = data;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetBool (CCSSetting * setting, Bool data, Bool processChanged)
+ccsSettingSetBoolDefault (CCSSetting * setting, Bool data, Bool processChanged)
 {
-    if (setting->type != TypeBool)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeBool)
 	return FALSE;
 
-    if (setting->isDefault
-	&& ((setting->defaultValue.value.asBool && data)
-	     || (!setting->defaultValue.value.asBool && !data)))
+    if (sPrivate->isDefault
+	&& ((sPrivate->defaultValue.value.asBool && data)
+	     || (!sPrivate->defaultValue.value.asBool && !data)))
 	return TRUE;
 
-    if (!setting->isDefault
-	&& ((setting->defaultValue.value.asBool && data)
-	     || (!setting->defaultValue.value.asBool && !data)))
+    if (!sPrivate->isDefault
+	&& ((sPrivate->defaultValue.value.asBool && data)
+	     || (!sPrivate->defaultValue.value.asBool && !data)))
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if ((setting->value->value.asBool && data)
-	 || (!setting->value->value.asBool && !data))
+    if ((sPrivate->value->value.asBool && data)
+	 || (!sPrivate->value->value.asBool && !data))
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asBool = data;
+    sPrivate->value->value.asBool = data;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetString (CCSSetting * setting, const char *data, Bool processChanged)
+ccsSettingSetStringDefault (CCSSetting * setting, const char *data, Bool processChanged)
 {
-    if (setting->type != TypeString)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeString)
 	return FALSE;
 
     if (!data)
 	return FALSE;
 
-    Bool isDefault = strcmp (setting->defaultValue.value.asString, data) == 0;
+    Bool isDefault = strcmp (sPrivate->defaultValue.value.asString, data) == 0;
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (!strcmp (setting->value->value.asString, data))
+    if (!strcmp (sPrivate->value->value.asString, data))
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    free (setting->value->value.asString);
+    free (sPrivate->value->value.asString);
 
-    setting->value->value.asString = strdup (data);
+    sPrivate->value->value.asString = strdup (data);
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-		ccsSettingListAppend (setting->parent->context->changedSettings,
-				      setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetColor (CCSSetting * setting, CCSSettingColorValue data, Bool processChanged)
+ccsSettingSetColorDefault (CCSSetting * setting, CCSSettingColorValue data, Bool processChanged)
 {
-    if (setting->type != TypeColor)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeColor)
 	return FALSE;
 
-    CCSSettingColorValue defValue = setting->defaultValue.value.asColor;
+    CCSSettingColorValue defValue = sPrivate->defaultValue.value.asColor;
 
     Bool isDefault = ccsIsEqualColor (defValue, data);
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (ccsIsEqualColor (setting->value->value.asColor, data))
+    if (ccsIsEqualColor (sPrivate->value->value.asColor, data))
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asColor = data;
+    sPrivate->value->value.asColor = data;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetMatch (CCSSetting * setting, const char *data, Bool processChanged)
+ccsSettingSetMatchDefault (CCSSetting * setting, const char *data, Bool processChanged)
 {
-    if (setting->type != TypeMatch)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeMatch)
 	return FALSE;
 
     if (!data)
 	return FALSE;
 
-    Bool isDefault = strcmp (setting->defaultValue.value.asMatch, data) == 0;
+    Bool isDefault = strcmp (sPrivate->defaultValue.value.asMatch, data) == 0;
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (!strcmp (setting->value->value.asMatch, data))
+    if (!strcmp (sPrivate->value->value.asMatch, data))
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    free (setting->value->value.asMatch);
+    free (sPrivate->value->value.asMatch);
 
-    setting->value->value.asMatch = strdup (data);
+    sPrivate->value->value.asMatch = strdup (data);
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetKey (CCSSetting * setting, CCSSettingKeyValue data, Bool processChanged)
+ccsSettingSetKeyDefault (CCSSetting * setting, CCSSettingKeyValue data, Bool processChanged)
 {
-    if (setting->type != TypeKey)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeKey)
 	return FALSE;
 
-    CCSSettingKeyValue defValue = setting->defaultValue.value.asKey;
+    CCSSettingKeyValue defValue = sPrivate->defaultValue.value.asKey;
 
     Bool isDefault = ccsIsEqualKey (data, defValue);
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (ccsIsEqualKey (setting->value->value.asKey, data))
+    if (ccsIsEqualKey (sPrivate->value->value.asKey, data))
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asKey.keysym = data.keysym;
-    setting->value->value.asKey.keyModMask = data.keyModMask;
+    sPrivate->value->value.asKey.keysym = data.keysym;
+    sPrivate->value->value.asKey.keyModMask = data.keyModMask;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetButton (CCSSetting * setting, CCSSettingButtonValue data, Bool processChanged)
+ccsSettingSetButtonDefault (CCSSetting * setting, CCSSettingButtonValue data, Bool processChanged)
 {
-    if (setting->type != TypeButton)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeButton)
 	return FALSE;
 
-    CCSSettingButtonValue defValue = setting->defaultValue.value.asButton;
+    CCSSettingButtonValue defValue = sPrivate->defaultValue.value.asButton;
 
     Bool isDefault = ccsIsEqualButton (data, defValue);
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (ccsIsEqualButton (setting->value->value.asButton, data))
+    if (ccsIsEqualButton (sPrivate->value->value.asButton, data))
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asButton.button = data.button;
-    setting->value->value.asButton.buttonModMask = data.buttonModMask;
-    setting->value->value.asButton.edgeMask = data.edgeMask;
+    sPrivate->value->value.asButton.button = data.button;
+    sPrivate->value->value.asButton.buttonModMask = data.buttonModMask;
+    sPrivate->value->value.asButton.edgeMask = data.edgeMask;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetEdge (CCSSetting * setting, unsigned int data, Bool processChanged)
+ccsSettingSetEdgeDefault (CCSSetting * setting, unsigned int data, Bool processChanged)
 {
-    if (setting->type != TypeEdge)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeEdge)
 	return FALSE;
 
-    Bool isDefault = (data == setting->defaultValue.value.asEdge);
+    Bool isDefault = (data == sPrivate->defaultValue.value.asEdge);
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (setting->value->value.asEdge == data)
+    if (sPrivate->value->value.asEdge == data)
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asEdge = data;
+    sPrivate->value->value.asEdge = data;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	     ccsSettingListAppend (setting->parent->context->changedSettings,
-				   setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetBell (CCSSetting * setting, Bool data, Bool processChanged)
+ccsSettingSetBellDefault (CCSSetting * setting, Bool data, Bool processChanged)
 {
-    if (setting->type != TypeBell)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeBell)
 	return FALSE;
 
-    Bool isDefault = (data == setting->defaultValue.value.asBool);
+    Bool isDefault = (data == sPrivate->defaultValue.value.asBool);
 
-    if (setting->isDefault && isDefault)
+    if (sPrivate->isDefault && isDefault)
 	return TRUE;
 
-    if (!setting->isDefault && isDefault)
+    if (!sPrivate->isDefault && isDefault)
     {
 	ccsResetToDefault (setting, processChanged);
 	return TRUE;
     }
 
-    if (setting->value->value.asBell == data)
+    if (sPrivate->value->value.asBell == data)
 	return TRUE;
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    setting->value->value.asBell = data;
+    sPrivate->value->value.asBell = data;
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
-static CCSSettingValueList
+CCSSettingValueList
 ccsCopyList (CCSSettingValueList l1, CCSSetting * setting)
 {
     CCSSettingValueList l2 = NULL;
@@ -1410,7 +2467,7 @@ ccsCopyList (CCSSettingValueList l1, CCSSetting * setting)
 	value->parent = setting;
 	value->isListChild = TRUE;
 
-	switch (setting->info.forList.listType)
+	switch (ccsSettingGetInfo (setting)->forList.listType)
 	{
 	case TypeInt:
 	    value->value.asInt = l1->data->value.asInt;
@@ -1448,7 +2505,7 @@ ccsCopyList (CCSSettingValueList l1, CCSSetting * setting)
 	default:
 	  /* FIXME If l2 != NULL, we leak l2 */
 	    free (value);
-	    return FALSE;
+	    return NULL;
 	    break;
 	}
 
@@ -1460,13 +2517,15 @@ ccsCopyList (CCSSettingValueList l1, CCSSetting * setting)
 }
 
 Bool
-ccsSetList (CCSSetting * setting, CCSSettingValueList data, Bool processChanged)
+ccsSettingSetListDefault (CCSSetting * setting, CCSSettingValueList data, Bool processChanged)
 {
-    if (setting->type != TypeList)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeList)
 	return FALSE;
 
-    Bool isDefault = ccsCompareLists (setting->defaultValue.value.asList, data,
-				      setting->info.forList);
+    Bool isDefault = ccsCompareLists (sPrivate->defaultValue.value.asList, data,
+				      sPrivate->info.forList);
 
     /* Don't need to worry about default values
      * when processChanged is off since use of that
@@ -1474,53 +2533,53 @@ ccsSetList (CCSSetting * setting, CCSSettingValueList data, Bool processChanged)
      * temporary storage */
     if (!processChanged)
     {
-	if (setting->isDefault && isDefault)
+	if (sPrivate->isDefault && isDefault)
 	{
 	    return TRUE;
 	}
 
-	if (!setting->isDefault && isDefault)
+	if (!sPrivate->isDefault && isDefault)
 	{
 	    ccsResetToDefault (setting, processChanged);
 	    return TRUE;
 	}
     }
 
-    if (ccsCompareLists (setting->value->value.asList, data,
-			 setting->info.forList))
+    if (ccsCompareLists (sPrivate->value->value.asList, data,
+			 sPrivate->info.forList))
     {
 	return TRUE;
     }
 
-    if (setting->isDefault)
+    if (sPrivate->isDefault)
 	copyFromDefault (setting);
 
-    ccsSettingValueListFree (setting->value->value.asList, TRUE);
+    ccsSettingValueListFree (sPrivate->value->value.asList, TRUE);
 
-    setting->value->value.asList = ccsCopyList (data, setting);
+    sPrivate->value->value.asList = ccsCopyList (data, setting);
 
-    if ((strcmp (setting->name, "active_plugins") == 0) &&
-	(strcmp (setting->parent->name, "core") == 0) && processChanged)
+    if ((strcmp (sPrivate->name, "active_plugins") == 0) &&
+	(strcmp (ccsPluginGetName (sPrivate->parent), "core") == 0) && processChanged)
     {
 	CCSStringList list;
 
-	list = ccsGetStringListFromValueList (setting->value->value.asList);
-	ccsSetActivePluginList (setting->parent->context, list);
+	list = ccsGetStringListFromValueList (sPrivate->value->value.asList);
+	ccsSetActivePluginList (ccsPluginGetContext (sPrivate->parent), list);
 	ccsStringListFree (list, TRUE);
     }
 
     if (processChanged)
-	setting->parent->context->changedSettings =
-	    ccsSettingListAppend (setting->parent->context->changedSettings,
-				  setting);
+	ccsContextAddChangedSetting (ccsPluginGetContext (sPrivate->parent), setting);
 
     return TRUE;
 }
 
 Bool
-ccsSetValue (CCSSetting * setting, CCSSettingValue * data, Bool processChanged)
+ccsSettingSetValueDefault (CCSSetting * setting, CCSSettingValue * data, Bool processChanged)
 {
-    switch (setting->type)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    switch (sPrivate->type)
     {
     case TypeInt:
 	return ccsSetInt (setting, data->value.asInt, processChanged);
@@ -1562,113 +2621,305 @@ ccsSetValue (CCSSetting * setting, CCSSettingValue * data, Bool processChanged)
 }
 
 Bool
-ccsGetInt (CCSSetting * setting, int *data)
+ccsSettingGetIntDefault (CCSSetting * setting, int *data)
 {
-    if (setting->type != TypeInt)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    if (sPrivate->type != TypeInt)
 	return FALSE;
 
-    *data = setting->value->value.asInt;
+    *data = sPrivate->value->value.asInt;
     return TRUE;
 }
 
 Bool
-ccsGetFloat (CCSSetting * setting, float *data)
+ccsSettingGetFloatDefault (CCSSetting * setting, float *data)
 {
-    if (setting->type != TypeFloat)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeFloat)
 	return FALSE;
 
-    *data = setting->value->value.asFloat;
+    *data = sPrivate->value->value.asFloat;
     return TRUE;
 }
 
 Bool
-ccsGetBool (CCSSetting * setting, Bool * data)
+ccsSettingGetBoolDefault (CCSSetting * setting, Bool * data)
 {
-    if (setting->type != TypeBool)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeBool)
 	return FALSE;
 
-    *data = setting->value->value.asBool;
+    *data = sPrivate->value->value.asBool;
     return TRUE;
 }
 
 Bool
-ccsGetString (CCSSetting * setting, char **data)
+ccsSettingGetStringDefault (CCSSetting * setting, char **data)
 {
-    if (setting->type != TypeString)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeString)
 	return FALSE;
 
-    *data = setting->value->value.asString;
+    *data = sPrivate->value->value.asString;
     return TRUE;
 }
 
 Bool
-ccsGetColor (CCSSetting * setting, CCSSettingColorValue * data)
+ccsSettingGetColorDefault (CCSSetting * setting, CCSSettingColorValue * data)
 {
-    if (setting->type != TypeColor)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeColor)
 	return TRUE;
 
-    *data = setting->value->value.asColor;
+    *data = sPrivate->value->value.asColor;
     return TRUE;
 }
 
 Bool
-ccsGetMatch (CCSSetting * setting, char **data)
+ccsSettingGetMatchDefault (CCSSetting * setting, char **data)
 {
-    if (setting->type != TypeMatch)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeMatch)
 	return FALSE;
 
-    *data = setting->value->value.asMatch;
+    *data = sPrivate->value->value.asMatch;
     return TRUE;
 }
 
 Bool
-ccsGetKey (CCSSetting * setting, CCSSettingKeyValue * data)
+ccsSettingGetKeyDefault (CCSSetting * setting, CCSSettingKeyValue * data)
 {
-    if (setting->type != TypeKey)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeKey)
 	return FALSE;
 
-    *data = setting->value->value.asKey;
+    *data = sPrivate->value->value.asKey;
     return TRUE;
 }
 
 Bool
-ccsGetButton (CCSSetting * setting, CCSSettingButtonValue * data)
+ccsSettingGetButtonDefault (CCSSetting * setting, CCSSettingButtonValue * data)
 {
-    if (setting->type != TypeButton)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeButton)
 	return FALSE;
 
-    *data = setting->value->value.asButton;
+    *data = sPrivate->value->value.asButton;
     return TRUE;
 }
 
 Bool
-ccsGetEdge (CCSSetting * setting, unsigned int * data)
+ccsSettingGetEdgeDefault (CCSSetting * setting, unsigned int * data)
 {
-    if (setting->type != TypeEdge)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeEdge)
 	return FALSE;
 
-    *data = setting->value->value.asEdge;
+    *data = sPrivate->value->value.asEdge;
     return TRUE;
 }
 
 Bool
-ccsGetBell (CCSSetting * setting, Bool * data)
+ccsSettingGetBellDefault (CCSSetting * setting, Bool * data)
 {
-    if (setting->type != TypeBell)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeBell)
 	return FALSE;
 
-    *data = setting->value->value.asBell;
+    *data = sPrivate->value->value.asBell;
     return TRUE;
 }
 
 Bool
-ccsGetList (CCSSetting * setting, CCSSettingValueList * data)
+ccsSettingGetListDefault (CCSSetting * setting, CCSSettingValueList * data)
 {
-    if (setting->type != TypeList)
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting)
+
+    if (sPrivate->type != TypeList)
 	return FALSE;
 
-    *data = setting->value->value.asList;
+    *data = sPrivate->value->value.asList;
     return TRUE;
+}
+
+Bool ccsGetInt (CCSSetting *setting,
+		int        *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetInt) (setting, data);
+}
+
+Bool ccsGetFloat (CCSSetting *setting,
+		  float      *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetFloat) (setting, data);
+}
+
+Bool ccsGetBool (CCSSetting *setting,
+		 Bool       *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetBool) (setting, data);
+}
+
+Bool ccsGetString (CCSSetting *setting,
+		   char       **data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetString) (setting, data);
+}
+
+Bool ccsGetColor (CCSSetting           *setting,
+		  CCSSettingColorValue *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetColor) (setting, data);
+}
+
+Bool ccsGetMatch (CCSSetting *setting,
+		  char       **data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetMatch) (setting, data);
+}
+
+Bool ccsGetKey (CCSSetting         *setting,
+		CCSSettingKeyValue *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetKey) (setting, data);
+}
+
+Bool ccsGetButton (CCSSetting            *setting,
+		   CCSSettingButtonValue *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetButton) (setting, data);
+}
+
+Bool ccsGetEdge (CCSSetting  *setting,
+		 unsigned int *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetEdge) (setting, data);
+}
+
+Bool ccsGetBell (CCSSetting *setting,
+		 Bool       *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetBell) (setting, data);
+}
+
+Bool ccsGetList (CCSSetting          *setting,
+		 CCSSettingValueList *data)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetList) (setting, data);
+}
+
+Bool ccsSetInt (CCSSetting *setting,
+		int        data,
+		Bool	   processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetInt) (setting, data, processChanged);
+}
+
+Bool ccsSetFloat (CCSSetting *setting,
+		  float      data,
+		  Bool	     processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetFloat) (setting, data, processChanged);
+}
+
+Bool ccsSetBool (CCSSetting *setting,
+		 Bool       data,
+		 Bool	    processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetBool) (setting, data, processChanged);
+}
+
+Bool ccsSetString (CCSSetting *setting,
+		   const char *data,
+		   Bool	      processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetString) (setting, data, processChanged);
+}
+
+Bool ccsSetColor (CCSSetting           *setting,
+		  CCSSettingColorValue data,
+		  Bool		       processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetColor) (setting, data, processChanged);
+}
+
+Bool ccsSetMatch (CCSSetting *setting,
+		  const char *data,
+		  Bool	     processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetMatch) (setting, data, processChanged);
+}
+
+Bool ccsSetKey (CCSSetting         *setting,
+		CCSSettingKeyValue data,
+		Bool		   processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetKey) (setting, data, processChanged);
+}
+
+Bool ccsSetButton (CCSSetting            *setting,
+		   CCSSettingButtonValue data,
+		   Bool			 processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetButton) (setting, data, processChanged);
+}
+
+Bool ccsSetEdge (CCSSetting   *setting,
+		 unsigned int data,
+		 Bool	      processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetEdge) (setting, data, processChanged);
+}
+
+Bool ccsSetBell (CCSSetting *setting,
+		 Bool       data,
+		 Bool	    processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetBell) (setting, data, processChanged);
+}
+
+Bool ccsSetList (CCSSetting          *setting,
+		 CCSSettingValueList data,
+		 Bool	 processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetList) (setting, data, processChanged);
+}
+
+Bool ccsSetValue (CCSSetting      *setting,
+		  CCSSettingValue *data,
+		  Bool		  processChanged)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetValue) (setting, data, processChanged);
+}
+
+void ccsResetToDefault (CCSSetting * setting, Bool processChanged)
+{
+    (*(GET_INTERFACE (CCSSettingInterface, setting))->settingResetToDefault) (setting, processChanged);
+}
+
+Bool ccsSettingIsIntegrated (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingIsIntegrated) (setting);
+}
+
+Bool ccsSettingIsReadOnly (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingIsReadOnly) (setting);
+}
+
+Bool ccsSettingIsReadableByBackend (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingIsReadableByBackend) (setting);
 }
 
 void
@@ -1677,15 +2928,11 @@ ccsContextDestroy (CCSContext * context)
     if (!context)
 	return;
 
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     if (cPrivate->backend)
     {
-	if (cPrivate->backend->vTable->backendFini)
-	    cPrivate->backend->vTable->backendFini (context);
-
-	dlclose (cPrivate->backend->dlhand);
-	free (cPrivate->backend);
+	ccsDynamicBackendUnref (cPrivate->backend);
 	cPrivate->backend = NULL;
     }
 
@@ -1693,15 +2940,17 @@ ccsContextDestroy (CCSContext * context)
 }
 
 CCSPluginList
-ccsGetActivePluginList (CCSContext * context)
+ccsGetActivePluginListDefault (CCSContext * context)
 {
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
     CCSPluginList rv = NULL;
-    CCSPluginList l = context->plugins;
+    CCSPluginList l = cPrivate->plugins;
 
     while (l)
     {
-	PLUGIN_PRIV (l->data);
-	if (pPrivate->active && strcmp (l->data->name, "ccp"))
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, l->data);
+	if (pPrivate->active && strcmp (ccsPluginGetName (l->data), "ccp"))
 	{
 	    rv = ccsPluginListAppend (rv, l->data);
 	}
@@ -1712,6 +2961,12 @@ ccsGetActivePluginList (CCSContext * context)
     return rv;
 }
 
+CCSPluginList
+ccsGetActivePluginList (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetActivePluginList) (context);
+}
+
 static CCSPlugin *
 findPluginInList (CCSPluginList list, char *name)
 {
@@ -1720,7 +2975,7 @@ findPluginInList (CCSPluginList list, char *name)
 
     while (list)
     {
-	if (!strcmp (list->data->name, name))
+	if (!strcmp (ccsPluginGetName (list->data), name))
 	    return list->data;
 
 	list = list->next;
@@ -1736,7 +2991,7 @@ typedef struct _PluginSortHelper
 } PluginSortHelper;
 
 CCSStringList
-ccsGetSortedPluginStringList (CCSContext * context)
+ccsGetSortedPluginStringListDefault (CCSContext * context)
 {
     CCSPluginList ap = ccsGetActivePluginList (context);
     CCSPluginList list;
@@ -1777,7 +3032,7 @@ ccsGetSortedPluginStringList (CCSContext * context)
 
     for (i = 0; i < len; i++)
     {
-	CCSStringList l = plugins[i].plugin->loadAfter;
+	CCSStringList l = ccsPluginGetLoadAfter (plugins[i].plugin);
 	while (l)
 	{
 	    p = findPluginInList (ap, ((CCSString *)l->data)->value);
@@ -1788,13 +3043,13 @@ ccsGetSortedPluginStringList (CCSContext * context)
 	    l = l->next;
 	}
 
-	l = plugins[i].plugin->requiresPlugin;
+	l = ccsPluginGetRequiresPlugins (plugins[i].plugin);
 	while (l)
 	{
 	    Bool found = FALSE;
 	    p = findPluginInList (ap, ((CCSString *)l->data)->value);
 
-	    CCSStringList l2 = plugins[i].plugin->loadBefore;
+	    CCSStringList l2 = ccsPluginGetLoadBefore (plugins[i].plugin);
 	    while (l2)
 	    {
 		if (strcmp (((CCSString *)l2->data)->value,
@@ -1809,7 +3064,7 @@ ccsGetSortedPluginStringList (CCSContext * context)
 	    l = l->next;
 	}
 
-	l = plugins[i].plugin->loadBefore;
+	l = ccsPluginGetLoadBefore (plugins[i].plugin);
 	while (l)
 	{
 	    p = findPluginInList (ap, ((CCSString *)l->data)->value);
@@ -1852,7 +3107,7 @@ ccsGetSortedPluginStringList (CCSContext * context)
 
 	    /* This is a special case to ensure that bench is the last plugin */
 	    if (len - removed > 1 &&
-		strcmp (plugins[i].plugin->name, "bench") == 0)
+		strcmp (ccsPluginGetName (plugins[i].plugin), "bench") == 0)
 		continue;
 
 	    found = TRUE;
@@ -1866,7 +3121,7 @@ ccsGetSortedPluginStringList (CCSContext * context)
 
 	    strPluginName = calloc (1, sizeof (CCSString));
 	    
-	    strPluginName->value = strdup (p->name);
+	    strPluginName->value = strdup (ccsPluginGetName (p));
 	    strPluginName->refCount = 1;
 
 	    rv = ccsStringListAppend (rv, strPluginName);
@@ -1878,8 +3133,7 @@ ccsGetSortedPluginStringList (CCSContext * context)
 
     if (error)
     {
-	fprintf (stderr,
-		 "libcompizconfig: unable to generate sorted plugin list\n");
+	ccsError ("Unable to generate sorted plugin list");
 
 	for (i = 0; i < len; i++)
 	{
@@ -1896,57 +3150,96 @@ ccsGetSortedPluginStringList (CCSContext * context)
     return rv;
 }
 
-char *
-ccsGetBackend (CCSContext * context)
+CCSStringList
+ccsGetSortedPluginStringList (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetSortedPluginStringList) (context);
+}
+
+const char *
+ccsGetBackendDefault (CCSContext * context)
 {
     if (!context)
 	return NULL;
 
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     if (!cPrivate->backend)
 	return NULL;
 
-    return cPrivate->backend->vTable->name;
+    return ccsDynamicBackendGetBackendName (cPrivate->backend);
+}
+
+const char *
+ccsGetBackend (CCSContext *context)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetBackend) (context);
 }
 
 Bool
-ccsGetIntegrationEnabled (CCSContext * context)
+ccsGetIntegrationEnabledDefault (CCSContext * context)
 {
     if (!context)
 	return FALSE;
 
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     return cPrivate->deIntegration;
 }
 
-char *
-ccsGetProfile (CCSContext * context)
-{
-    if (!context)
-	return NULL;
-
-    CONTEXT_PRIV (context);
-
-    return cPrivate->profile;
-}
-
 Bool
-ccsGetPluginListAutoSort (CCSContext * context)
+ccsGetIntegrationEnabled (CCSContext *context)
 {
     if (!context)
 	return FALSE;
 
-    CONTEXT_PRIV (context);
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetIntegrationEnabled) (context);
+}
+
+const char *
+ccsGetProfileDefault (CCSContext * context)
+{
+    if (!context)
+	return NULL;
+
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    return cPrivate->profile;
+}
+
+const char *
+ccsGetProfile (CCSContext *context)
+{
+    if (!context)
+	return NULL;
+
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetProfile) (context);
+}
+
+Bool
+ccsGetPluginListAutoSortDefault (CCSContext * context)
+{
+    if (!context)
+	return FALSE;
+
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     return cPrivate->pluginListAutoSort;
 }
 
-void
-ccsSetIntegrationEnabled (CCSContext * context, Bool value)
+Bool
+ccsGetPluginListAutoSort (CCSContext *context)
 {
-    CONTEXT_PRIV (context);
+    if (!context)
+	return FALSE;
+
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetPluginListAutoSort) (context);
+}
+
+void
+ccsSetIntegrationEnabledDefault (CCSContext * context, Bool value)
+{
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     /* no action required if nothing changed */
     if ((!cPrivate->deIntegration && !value) ||
@@ -1958,6 +3251,12 @@ ccsSetIntegrationEnabled (CCSContext * context, Bool value)
     ccsDisableFileWatch (cPrivate->configWatchId);
     ccsWriteConfig (OptionIntegration, (value) ? "true" : "false");
     ccsEnableFileWatch (cPrivate->configWatchId);
+}
+
+void
+ccsSetIntegrationEnabled (CCSContext *context, Bool value)
+{
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextSetIntegrationEnabled) (context, value);
 }
 
 static void
@@ -1987,9 +3286,9 @@ ccsWriteAutoSortedPluginList (CCSContext *context)
 }
 
 void
-ccsSetPluginListAutoSort (CCSContext * context, Bool value)
+ccsSetPluginListAutoSortDefault (CCSContext * context, Bool value)
 {
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     /* no action required if nothing changed */
     if ((!cPrivate->pluginListAutoSort && !value) ||
@@ -2007,12 +3306,18 @@ ccsSetPluginListAutoSort (CCSContext * context, Bool value)
 }
 
 void
-ccsSetProfile (CCSContext * context, char *name)
+ccsSetPluginListAutoSort (CCSContext *context, Bool value)
+{
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextSetPluginListAutoSort) (context, value);
+}
+
+void
+ccsSetProfileDefault (CCSContext * context, char *name)
 {
     if (!name)
 	name = "";
 
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     /* no action required if profile stays the same */
     if (cPrivate->profile && (strcmp (cPrivate->profile, name) == 0))
@@ -2029,161 +3334,205 @@ ccsSetProfile (CCSContext * context, char *name)
 }
 
 void
-ccsProcessEvents (CCSContext * context, unsigned int flags)
+ccsSetProfile (CCSContext *context, char *name)
+{
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextSetProfile) (context, name);
+}
+
+void
+ccsProcessEventsDefault (CCSContext * context, unsigned int flags)
 {
     if (!context)
 	return;
 
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     ccsCheckFileWatches ();
 
-    if (cPrivate->backend && cPrivate->backend->vTable->executeEvents)
-	(*cPrivate->backend->vTable->executeEvents) (flags);
+    if (cPrivate->backend)
+	ccsBackendExecuteEvents ((CCSBackend *) cPrivate->backend, flags);
 }
 
 void
-ccsReadSettings (CCSContext * context)
+ccsProcessEvents (CCSContext *context, unsigned int flags)
+{
+    if (!context)
+	return;
+
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextProcessEvents) (context, flags);
+}
+
+void
+ccsReadSettingsDefault (CCSContext * context)
 {
     if (!context)
 	return;
     
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
     
     if (!cPrivate->backend)
 	return;
 
-    if (!cPrivate->backend->vTable->readSetting)
+    if (!ccsDynamicBackendSupportsRead (cPrivate->backend))
 	return;
 
-    if (cPrivate->backend->vTable->readInit)
-	if (!(*cPrivate->backend->vTable->readInit) (context))
-	    return;
+    if (!ccsBackendReadInit ((CCSBackend *) cPrivate->backend, context))
+	return;
 
-    CCSPluginList pl = context->plugins;
+    CCSPluginList pl = cPrivate->plugins;
     while (pl)
     {
-	PLUGIN_PRIV (pl->data);
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, pl->data);
 	CCSSettingList sl = pPrivate->settings;
 
 	while (sl)
 	{
-	    (*cPrivate->backend->vTable->readSetting) (context, sl->data);
+	    ccsBackendReadSetting ((CCSBackend *) cPrivate->backend, context, sl->data);
 	    sl = sl->next;
 	}
 
 	pl = pl->next;
     }
 
-    if (cPrivate->backend->vTable->readDone)
-	(*cPrivate->backend->vTable->readDone) (context);
+    ccsBackendReadDone ((CCSBackend *) cPrivate->backend, context);
 }
 
 void
-ccsReadPluginSettings (CCSPlugin * plugin)
+ccsReadSettings (CCSContext *context)
 {
-    if (!plugin || !plugin->context)
+    if (!context)
 	return;
 
-    CONTEXT_PRIV (plugin->context);
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextReadSettings) (context);
+}
+
+void
+ccsReadPluginSettingsDefault (CCSPlugin * plugin)
+{
+    if (!plugin || !ccsPluginGetContext (plugin))
+	return;
+
+    CCSContext *context = ccsPluginGetContext (plugin);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     if (!cPrivate->backend)
 	return;
 
-    if (!cPrivate->backend->vTable->readSetting)
+    if (!ccsDynamicBackendSupportsRead (cPrivate->backend))
 	return;
 
-    if (cPrivate->backend->vTable->readInit)
-	if (!(*cPrivate->backend->vTable->readInit) (plugin->context))
-	    return;
+    if (!ccsBackendReadInit ((CCSBackend *) cPrivate->backend, ccsPluginGetContext (plugin)))
+	return;
 
-    PLUGIN_PRIV (plugin);
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
     CCSSettingList sl = pPrivate->settings;
     while (sl)
     {
-	(*cPrivate->backend->vTable->readSetting) (plugin->context, sl->data);
+	ccsBackendReadSetting ((CCSBackend *) cPrivate->backend, ccsPluginGetContext (plugin), sl->data);
 	sl = sl->next;
     }
 
-    if (cPrivate->backend->vTable->readDone)
-	(*cPrivate->backend->vTable->readDone) (plugin->context);
+    ccsBackendReadDone ((CCSBackend *) cPrivate->backend, ccsPluginGetContext (plugin));
 }
 
 void
-ccsWriteSettings (CCSContext * context)
+ccsReadPluginSettings (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginReadPluginSettings) (plugin);
+}
+
+void
+ccsWriteSettingsDefault (CCSContext * context)
 {
     if (!context)
 	return;
 
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     if (!cPrivate->backend)
 	return;
 
-    if (!cPrivate->backend->vTable->writeSetting)
+    if (!ccsDynamicBackendSupportsWrite (cPrivate->backend))
 	return;
 
-    if (cPrivate->backend->vTable->writeInit)
-	if (!(*cPrivate->backend->vTable->writeInit) (context))
-	    return;
+    if (!ccsBackendWriteInit ((CCSBackend *) cPrivate->backend, context))
+	return;
 
-    CCSPluginList pl = context->plugins;
+    CCSPluginList pl = cPrivate->plugins;
     while (pl)
     {
-	PLUGIN_PRIV (pl->data);
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, pl->data);
 	CCSSettingList sl = pPrivate->settings;
 
 	while (sl)
 	{
-	    (*cPrivate->backend->vTable->writeSetting) (context, sl->data);
+	    ccsBackendWriteSetting ((CCSBackend *) cPrivate->backend, context, sl->data);
 	    sl = sl->next;
 	}
 
 	pl = pl->next;
     }
 
-    if (cPrivate->backend->vTable->writeDone)
-	(*cPrivate->backend->vTable->writeDone) (context);
+    ccsBackendWriteDone ((CCSBackend *) cPrivate->backend, context);
 
-    context->changedSettings =
-	ccsSettingListFree (context->changedSettings, FALSE);
+    cPrivate->changedSettings =
+	ccsSettingListFree (cPrivate->changedSettings, FALSE);
 }
 
 void
-ccsWriteChangedSettings (CCSContext * context)
+ccsWriteSettings (CCSContext *context)
 {
     if (!context)
 	return;
 
-    CONTEXT_PRIV (context);
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextWriteSettings) (context);
+}
+
+void
+ccsWriteChangedSettingsDefault (CCSContext * context)
+{
+    if (!context)
+	return;
+
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
     
     if (!cPrivate->backend)
 	return;
 
-    if (!cPrivate->backend->vTable->writeSetting)
+    if (!ccsDynamicBackendSupportsWrite (cPrivate->backend))
 	return;
 
-    if (cPrivate->backend->vTable->writeInit)
-	if (!(*cPrivate->backend->vTable->writeInit) (context))
-	    return;
+    if (!ccsBackendWriteInit ((CCSBackend *) cPrivate->backend, context))
+	return;
 
-    if (ccsSettingListLength (context->changedSettings))
+    /* We must immediately steal the changed settings list
+     * if we recurse into this function */
+    CCSSettingList changedSettings = ccsContextStealChangedSettings (context);
+
+    if (ccsSettingListLength (changedSettings))
     {
-	CCSSettingList l = context->changedSettings;
+	CCSSettingList l = changedSettings;
 
 	while (l)
 	{
-	    (*cPrivate->backend->vTable->writeSetting) (context, l->data);
+	    ccsBackendWriteSetting ((CCSBackend *) cPrivate->backend, context, l->data);
 	    l = l->next;
 	}
     }
 
-    if (cPrivate->backend->vTable->writeDone)
-	(*cPrivate->backend->vTable->writeDone) (context);
+    ccsBackendWriteDone ((CCSBackend *) cPrivate->backend,context);
 
-    context->changedSettings =
-	ccsSettingListFree (context->changedSettings, FALSE);
+    ccsSettingListFree (changedSettings, FALSE);
+}
+
+void
+ccsWriteChangedSettings (CCSContext *context)
+{
+    if (!context)
+	return;
+
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextWriteChangedSettings) (context);
 }
 
 Bool
@@ -2226,26 +3575,30 @@ ccsPluginSetActive (CCSPlugin * plugin, Bool value)
     if (!plugin)
 	return FALSE;
 
-    PLUGIN_PRIV (plugin);
-    CONTEXT_PRIV (plugin->context);
+    CCSContext *context = ccsPluginGetContext (plugin);
+
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     pPrivate->active = value;
 
     if (cPrivate->pluginListAutoSort)
-	ccsWriteAutoSortedPluginList (plugin->context);
+	ccsWriteAutoSortedPluginList (ccsPluginGetContext (plugin));
 
     return TRUE;
 }
 
 CCSPluginConflictList
-ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
+ccsCanEnablePluginDefault (CCSContext * context, CCSPlugin * plugin)
 {
     CCSPluginConflictList list = NULL;
     CCSPluginList pl, pl2;
     CCSStringList sl;
 
     /* look if the plugin to be loaded requires a plugin not present */
-    sl = plugin->requiresPlugin;
+    sl = ccsPluginGetRequiresPlugins (plugin);
+
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     while (sl)
     {
@@ -2283,16 +3636,16 @@ ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
     }
 
     /* look if the new plugin wants a non-present feature */
-    sl = plugin->requiresFeature;
+    sl = ccsPluginGetRequiresFeatures (plugin);
 
     while (sl)
     {
-	pl = context->plugins;
+	pl = cPrivate->plugins;
 	pl2 = NULL;
 
 	while (pl)
 	{
-	    CCSStringList featureList = pl->data->providesFeature;
+	    CCSStringList featureList = ccsPluginGetProvidesFeatures (pl->data);
 
 	    while (featureList)
 	    {
@@ -2311,7 +3664,7 @@ ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
 
 	while (pl)
 	{
-	    if (ccsPluginIsActive (context, pl->data->name))
+	    if (ccsPluginIsActive (context, ccsPluginGetName (pl->data)))
 	    {
 		ccsPluginListFree (pl2, FALSE);
 		break;
@@ -2340,17 +3693,17 @@ ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
     }
 
     /* look if another plugin provides the same feature */
-    sl = plugin->providesFeature;
+    sl = ccsPluginGetProvidesFeatures (plugin);
     while (sl)
     {
-	pl = context->plugins;
+	pl = cPrivate->plugins;
 	CCSPluginConflict *conflict = NULL;
 
 	while (pl)
 	{
-	    if (ccsPluginIsActive (context, pl->data->name))
+	    if (ccsPluginIsActive (context, ccsPluginGetName (pl->data)))
 	    {
-		CCSStringList featureList = pl->data->providesFeature;
+		CCSStringList featureList = ccsPluginGetProvidesFeatures (pl->data);
 
 		while (featureList)
 		{
@@ -2384,17 +3737,17 @@ ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
     }
 
     /* look if another plugin provides a conflicting feature*/
-    sl = plugin->conflictFeature;
+    sl = ccsPluginGetProvidesFeatures (plugin);
     while (sl)
     {
-	pl = context->plugins;
+	pl = cPrivate->plugins;
 	CCSPluginConflict *conflict = NULL;
 
 	while (pl)
 	{
-	    if (ccsPluginIsActive (context, pl->data->name))
+	    if (ccsPluginIsActive (context, ccsPluginGetName (pl->data)))
 	    {
-		CCSStringList featureList = pl->data->providesFeature;
+		CCSStringList featureList = ccsPluginGetProvidesFeatures (pl->data);
 		while (featureList)
 		{
 		    if (strcmp (((CCSString *)sl->data)->value, ((CCSString *)featureList->data)->value) == 0)
@@ -2427,7 +3780,7 @@ ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
     }
 
     /* look if the plugin to be loaded conflict with a loaded plugin  */
-    sl = plugin->conflictPlugin;
+    sl = ccsPluginGetConflictPlugins (plugin);
 
     while (sl)
     {
@@ -2454,15 +3807,23 @@ ccsCanEnablePlugin (CCSContext * context, CCSPlugin * plugin)
 }
 
 CCSPluginConflictList
-ccsCanDisablePlugin (CCSContext * context, CCSPlugin * plugin)
+ccsCanEnablePlugin (CCSContext *context, CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextCanEnablePlugin) (context, plugin);
+}
+
+CCSPluginConflictList
+ccsCanDisablePluginDefault (CCSContext * context, CCSPlugin * plugin)
 {
     CCSPluginConflictList list = NULL;
     CCSPluginConflict *conflict = NULL;
     CCSPluginList pl;
     CCSStringList sl;
 
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
     /* look if the plugin to be unloaded is required by another plugin */
-    pl = context->plugins;
+    pl = cPrivate->plugins;
 
     for (; pl; pl = pl->next)
     {
@@ -2471,14 +3832,14 @@ ccsCanDisablePlugin (CCSContext * context, CCSPlugin * plugin)
 	if (pl->data == plugin)
 	    continue;
 
-	if (!ccsPluginIsActive (context, pl->data->name))
+	if (!ccsPluginIsActive (context, ccsPluginGetName (pl->data)))
 	    continue;
 
-	pluginList = pl->data->requiresPlugin;
+	pluginList = ccsPluginGetRequiresPlugins (pl->data);
 
 	while (pluginList)
 	{
-	    if (strcmp (plugin->name, ((CCSString *)pluginList->data)->value) == 0)
+	    if (strcmp (ccsPluginGetName (plugin), ((CCSString *)pluginList->data)->value) == 0)
 	    {
 		if (!conflict)
 		{
@@ -2486,7 +3847,7 @@ ccsCanDisablePlugin (CCSContext * context, CCSPlugin * plugin)
 		    conflict->refCount = 1;
 		    if (conflict)
 		    {
-			conflict->value = strdup (plugin->name);
+			conflict->value = strdup (ccsPluginGetName (plugin));
 			conflict->type = ConflictPluginNeeded;
 		    }
 		}
@@ -2507,10 +3868,10 @@ ccsCanDisablePlugin (CCSContext * context, CCSPlugin * plugin)
     }
 
     /* look if a feature provided is required by another plugin */
-    sl = plugin->providesFeature;
+    sl = ccsPluginGetProvidesFeatures (plugin);
     while (sl)
     {
-	pl = context->plugins;
+	pl = cPrivate->plugins;
 	for (; pl; pl = pl->next)
 	{
 	    CCSStringList pluginList;
@@ -2518,10 +3879,10 @@ ccsCanDisablePlugin (CCSContext * context, CCSPlugin * plugin)
 	    if (pl->data == plugin)
 		continue;
 
-	    if (!ccsPluginIsActive (context, pl->data->name))
+	    if (!ccsPluginIsActive (context, ccsPluginGetName (pl->data)))
 		continue;
 
-	    pluginList = pl->data->requiresFeature;
+	    pluginList = ccsPluginGetRequiresFeatures (pl->data);
 
 	    while (pluginList)
 	    {
@@ -2555,32 +3916,50 @@ ccsCanDisablePlugin (CCSContext * context, CCSPlugin * plugin)
     return list;
 }
 
+CCSPluginConflictList
+ccsCanDisablePlugin (CCSContext *context, CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextCanDisablePlugin) (context, plugin);
+}
+
 CCSStringList
-ccsGetExistingProfiles (CCSContext * context)
+ccsGetExistingProfilesDefault (CCSContext * context)
 {
     if (!context)
 	return NULL;
     
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
     
     if (!cPrivate->backend)
 	return NULL;
 
-    if (cPrivate->backend->vTable->getExistingProfiles)
-	return (*cPrivate->backend->vTable->getExistingProfiles) (context);
+    if (ccsDynamicBackendSupportsProfiles (cPrivate->backend))
+	return ccsBackendGetExistingProfiles ((CCSBackend *) cPrivate->backend, context);
 
     return NULL;
 }
 
+CCSStringList
+ccsGetExistingProfiles (CCSContext *context)
+{
+    if (!context)
+	return NULL;
+
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextGetExistingProfiles) (context);
+}
+
 void
-ccsDeleteProfile (CCSContext * context, char *name)
+ccsDeleteProfileDefault (CCSContext * context, char *name)
 {
     if (!context)
 	return;
     
-    CONTEXT_PRIV (context);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
     
     if (!cPrivate->backend)
+	return;
+
+    if (!ccsDynamicBackendSupportsProfiles (cPrivate->backend))
 	return;
 
     /* never ever delete default profile */
@@ -2592,8 +3971,16 @@ ccsDeleteProfile (CCSContext * context, char *name)
     if (strcmp (cPrivate->profile, name) == 0)
 	ccsSetProfile (context, "");
 
-    if (cPrivate->backend->vTable->deleteProfile)
-	(*cPrivate->backend->vTable->deleteProfile) (context, name);
+    ccsBackendDeleteProfile ((CCSBackend *) cPrivate->backend, context, name);
+}
+
+void
+ccsDeleteProfile (CCSContext *context, char *name)
+{
+    if (!context)
+	return;
+
+    (*(GET_INTERFACE (CCSContextInterface, context))->contextDeleteProfile) (context, name);
 }
 
 static void
@@ -2602,7 +3989,6 @@ addBackendInfo (CCSBackendInfoList * bl, char *file)
     void *dlhand = NULL;
     char *err = NULL;
     Bool found = FALSE;
-    CCSBackendInfo *info;
 
     dlerror ();
 
@@ -2618,8 +4004,16 @@ addBackendInfo (CCSBackendInfoList * bl, char *file)
 	return;
     }
 
-    CCSBackendVTable *vt = getInfo ();
+    CCSBackendInterface *vt = getInfo ();
     if (!vt)
+    {
+	dlclose (dlhand);
+	return;
+    }
+
+    CCSBackendInfo *info = ccsCopyBackendInfoFromBackend (NULL, vt);
+
+    if (!info)
     {
 	dlclose (dlhand);
 	return;
@@ -2628,7 +4022,7 @@ addBackendInfo (CCSBackendInfoList * bl, char *file)
     CCSBackendInfoList l = *bl;
     while (l)
     {
-	if (!strcmp (l->data->name, vt->name))
+	if (!strcmp (l->data->name, info->name))
 	{
 	    found = TRUE;
 	    break;
@@ -2642,20 +4036,6 @@ addBackendInfo (CCSBackendInfoList * bl, char *file)
 	dlclose (dlhand);
 	return;
     }
-
-    info = calloc (1, sizeof (CCSBackendInfo));
-    if (!info)
-    {
-	dlclose (dlhand);
-	return;
-    }
-
-    info->refCount = 1;
-    info->name = strdup (vt->name);
-    info->shortDesc = (vt->shortDesc) ? strdup (vt->shortDesc) : strdup ("");
-    info->longDesc = (vt->longDesc) ? strdup (vt->longDesc) : strdup ("");
-    info->integrationSupport = vt->integrationSupport;
-    info->profileSupport = vt->profileSupport;
 
     *bl = ccsBackendInfoListAppend (*bl, info);
     dlclose (dlhand);
@@ -2677,7 +4057,9 @@ backendNameFilter (const struct dirent *name)
 }
 
 static void
-getBackendInfoFromDir (CCSBackendInfoList * bl, char *path)
+getBackendInfoFromDir (CCSBackendInfoList * bl,
+		       char *path,
+		       const char *currentBackend)
 {
 
     struct dirent **nameList;
@@ -2692,6 +4074,9 @@ getBackendInfoFromDir (CCSBackendInfoList * bl, char *path)
 
     for (i = 0; i < nFile; i++)
     {
+	if (strncmp (currentBackend, &(nameList[i]->d_name[3]), strlen (currentBackend)) == 0)
+	    continue;
+
 	char file[1024];
 	sprintf (file, "%s/%s", path, nameList[i]->d_name);
 	addBackendInfo (bl, file);
@@ -2703,53 +4088,65 @@ getBackendInfoFromDir (CCSBackendInfoList * bl, char *path)
 }
 
 CCSBackendInfoList
-ccsGetExistingBackends ()
+ccsGetExistingBackends (CCSContext *context)
 {
     CCSBackendInfoList rv = NULL;
     char *home = getenv ("HOME");
-    char *override_backend = getenv ("LIBCOMPIZCONFIG_BACKEND_PATH");
+    char *overrideBackend = getenv ("LIBCOMPIZCONFIG_BACKEND_PATH");
     char *backenddir;
+    const char *currentBackend = ccsGetBackend (context);
 
-    if (override_backend && strlen (override_backend))
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    const CCSBackendInterface *currentBackendInterface =
+	    GET_INTERFACE (CCSBackendInterface, cPrivate->backend);
+
+    rv = ccsBackendInfoListAppend (rv, ccsCopyBackendInfoFromBackend ((CCSBackend *) cPrivate->backend,
+								      currentBackendInterface));
+
+    if (overrideBackend && strlen (overrideBackend))
     {
 	if (asprintf (&backenddir, "%s",
-		      override_backend) == -1)
+		      overrideBackend) == -1)
 	    backenddir = NULL;
 
 	if (backenddir)
 	{
-	    getBackendInfoFromDir (&rv, backenddir);
+	    getBackendInfoFromDir (&rv, backenddir, currentBackend);
 	    free (backenddir);
 	}
     }
-
-    if (home && strlen (home))
+    else
     {
-	if (asprintf (&backenddir, "%s/.compizconfig/backends", home) == -1)
+	if (home && strlen (home))
+	{
+	    if (asprintf (&backenddir, "%s/.compizconfig/backends", home) == -1)
+		backenddir = NULL;
+
+	    if (backenddir)
+	    {
+		getBackendInfoFromDir (&rv, backenddir, currentBackend);
+		free (backenddir);
+	    }
+	}
+
+	if (asprintf (&backenddir, "%s/compizconfig/backends", LIBDIR) == -1)
 	    backenddir = NULL;
 
 	if (backenddir)
 	{
-	    getBackendInfoFromDir (&rv, backenddir);
+	    getBackendInfoFromDir (&rv, backenddir, currentBackend);
 	    free (backenddir);
 	}
     }
 
-    if (asprintf (&backenddir, "%s/compizconfig/backends", LIBDIR) == -1)
-	backenddir = NULL;
-
-    if (backenddir)
-    {
-	getBackendInfoFromDir (&rv, backenddir);
-	free (backenddir);
-    }
     return rv;
 }
 
 Bool
-ccsExportToFile (CCSContext *context,
-		 const char *fileName,
-		 Bool       skipDefaults)
+ccsExportToFileDefault (CCSContext *context,
+			const char *fileName,
+			Bool       skipDefaults)
 {
     IniDictionary *exportFile;
     CCSPluginList p;
@@ -2762,10 +4159,12 @@ ccsExportToFile (CCSContext *context,
     if (!exportFile)
 	return FALSE;
 
-    for (p = context->plugins; p; p = p->next)
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    for (p = cPrivate->plugins; p; p = p->next)
     {
 	plugin = p->data;
-	PLUGIN_PRIV (plugin);
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
 	if (!pPrivate->loaded)
 	    ccsLoadPluginSettings (plugin);
@@ -2774,62 +4173,62 @@ ccsExportToFile (CCSContext *context,
 	{
 	    setting = s->data;
 
-	    if (skipDefaults && setting->isDefault)
+	    if (skipDefaults && ccsSettingGetIsDefault (setting))
 		continue;
 
 	    if (asprintf (&keyName, "s%d_%s",
-			  context->screenNum, setting->name) == -1)
+			  cPrivate->screenNum, ccsSettingGetName (setting)) == -1)
 		return FALSE;
 
-	    switch (setting->type)
-	    {
-	    case TypeBool:
-		ccsIniSetBool (exportFile, plugin->name, keyName,
-			       setting->value->value.asBool);
-		break;
-	    case TypeInt:
-		ccsIniSetInt (exportFile, plugin->name, keyName,
-			      setting->value->value.asInt);
-		break;
-	    case TypeFloat:
-		ccsIniSetFloat (exportFile, plugin->name, keyName,
-				setting->value->value.asFloat);
-		break;
-	    case TypeString:
-		ccsIniSetString (exportFile, plugin->name, keyName,
-				 setting->value->value.asString);
-		break;
-	    case TypeKey:
-		ccsIniSetKey (exportFile, plugin->name, keyName,
-			      setting->value->value.asKey);
-		break;
-	    case TypeButton:
-		ccsIniSetButton (exportFile, plugin->name, keyName,
-				 setting->value->value.asButton);
-		break;
-	    case TypeEdge:
-		ccsIniSetEdge (exportFile, plugin->name, keyName,
-			       setting->value->value.asEdge);
-		break;
-	    case TypeBell:
-		ccsIniSetBell (exportFile, plugin->name, keyName,
-			       setting->value->value.asBell);
-		break;
-	    case TypeColor:
-		ccsIniSetColor (exportFile, plugin->name, keyName,
-				setting->value->value.asColor);
-		break;
-	    case TypeMatch:
-		ccsIniSetString (exportFile, plugin->name, keyName,
-				 setting->value->value.asMatch);
-		break;
-	    case TypeList:
-		ccsIniSetList (exportFile, plugin->name, keyName,
-			       setting->value->value.asList,
-			       setting->info.forList.listType);
-		break;
-	    default:
-		break;
+	    switch (ccsSettingGetType (setting))
+ 	    {
+ 	    case TypeBool:
+		ccsIniSetBool (exportFile, ccsPluginGetName (plugin), keyName,
+			       ccsSettingGetValue (setting)->value.asBool);
+ 		break;
+ 	    case TypeInt:
+		ccsIniSetInt (exportFile, ccsPluginGetName (plugin), keyName,
+			      ccsSettingGetValue (setting)->value.asInt);
+ 		break;
+ 	    case TypeFloat:
+		ccsIniSetFloat (exportFile, ccsPluginGetName (plugin), keyName,
+				ccsSettingGetValue (setting)->value.asFloat);
+ 		break;
+ 	    case TypeString:
+		ccsIniSetString (exportFile, ccsPluginGetName (plugin), keyName,
+				 ccsSettingGetValue (setting)->value.asString);
+ 		break;
+ 	    case TypeKey:
+		ccsIniSetKey (exportFile, ccsPluginGetName (plugin), keyName,
+			      ccsSettingGetValue (setting)->value.asKey);
+ 		break;
+ 	    case TypeButton:
+		ccsIniSetButton (exportFile, ccsPluginGetName (plugin), keyName,
+				 ccsSettingGetValue (setting)->value.asButton);
+ 		break;
+ 	    case TypeEdge:
+		ccsIniSetEdge (exportFile, ccsPluginGetName (plugin), keyName,
+			       ccsSettingGetValue (setting)->value.asEdge);
+ 		break;
+ 	    case TypeBell:
+		ccsIniSetBell (exportFile, ccsPluginGetName (plugin), keyName,
+			       ccsSettingGetValue (setting)->value.asBell);
+ 		break;
+ 	    case TypeColor:
+		ccsIniSetColor (exportFile, ccsPluginGetName (plugin), keyName,
+				ccsSettingGetValue (setting)->value.asColor);
+ 		break;
+ 	    case TypeMatch:
+		ccsIniSetString (exportFile, ccsPluginGetName (plugin), keyName,
+				 ccsSettingGetValue (setting)->value.asMatch);
+ 		break;
+ 	    case TypeList:
+		ccsIniSetList (exportFile, ccsPluginGetName (plugin), keyName,
+			       ccsSettingGetValue (setting)->value.asList,
+			       ccsSettingGetInfo (setting)->forList.listType);
+ 		break;
+ 	    default:
+ 		break;
 	    }
 	    free (keyName);
 	}
@@ -2839,6 +4238,15 @@ ccsExportToFile (CCSContext *context,
     ccsIniClose (exportFile);
 
     return TRUE;
+}
+
+Bool
+ccsExportToFile (CCSContext *context, const char *fileName, Bool skipDefaults)
+{
+    if (!context)
+	return FALSE;
+
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextExportToFile) (context, fileName, skipDefaults);
 }
 
 /* + with a value will attempt to append or overwrite that value if there is no -
@@ -2855,10 +4263,12 @@ ccsProcessSettingPlus (IniDictionary	   *dict,
 		       CCSSetting	   *setting)
 {
     char         *keyName = NULL;
-    char         *sectionName = strdup (setting->parent->name);
+    char         *sectionName = strdup (ccsPluginGetName (ccsSettingGetParent (setting)));
     char         *iniValue = NULL;
 
-    if (asprintf (&keyName, "+s%d_%s", context->screenNum, setting->name) == -1)
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    if (asprintf (&keyName, "+s%d_%s", cPrivate->screenNum, ccsSettingGetName (setting)) == -1)
 	return FALSE;
 
     if (ccsIniGetString (dict, sectionName, keyName, &iniValue))
@@ -2868,9 +4278,11 @@ ccsProcessSettingPlus (IniDictionary	   *dict,
 	if (!newSetting)
 	    return FALSE;
 
+	ccsObjectInit (newSetting, &ccsDefaultObjectAllocator);
+
 	copySetting (setting, newSetting);
 
-	switch (newSetting->type)
+	switch (ccsSettingGetType (newSetting))
 	{
 	    case TypeInt:
 	    {
@@ -2975,7 +4387,7 @@ ccsProcessSettingPlus (IniDictionary	   *dict,
 	{
 	    CCSSetting *s = (CCSSetting *) listIter->data;
 
-	    if (strcmp (s->name, newSetting->name) == 0)
+	    if (strcmp (ccsSettingGetName (s), ccsSettingGetName (newSetting)) == 0)
 	    {
 		upgrade->replaceToValueSettings = ccsSettingListAppend (upgrade->replaceToValueSettings, (void *) newSetting);
 		upgrade->replaceFromValueSettings = ccsSettingListAppend (upgrade->replaceFromValueSettings, (void *) s);
@@ -3009,10 +4421,12 @@ ccsProcessSettingMinus (IniDictionary      *dict,
 			CCSSetting	   *setting)
 {
     char         *keyName = NULL;
-    char         *sectionName = strdup (setting->parent->name);
+    char         *sectionName = strdup (ccsPluginGetName (ccsSettingGetParent (setting)));
     char         *iniValue = NULL;
 
-    if (asprintf (&keyName, "-s%d_%s", context->screenNum, setting->name) == -1)
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    if (asprintf (&keyName, "-s%d_%s", cPrivate->screenNum, ccsSettingGetName (setting)) == -1)
 	return FALSE;
 
     if (ccsIniGetString (dict, sectionName, keyName, &iniValue))
@@ -3022,9 +4436,11 @@ ccsProcessSettingMinus (IniDictionary      *dict,
 	if (!newSetting)
 	    return FALSE;
 
+	ccsObjectInit (newSetting, &ccsDefaultObjectAllocator);
+
 	copySetting (setting, newSetting);
 
-	switch (newSetting->type)
+	switch (ccsSettingGetType (newSetting))
 	{
 	    case TypeInt:
 	    {
@@ -3129,7 +4545,7 @@ ccsProcessSettingMinus (IniDictionary      *dict,
 	{
 	    CCSSetting *s = (CCSSetting *) listIter->data;
 
-	    if (strcmp (s->name, newSetting->name) == 0)
+	    if (strcmp (ccsSettingGetName (s), ccsSettingGetName (newSetting)) == 0)
 	    {
 		upgrade->replaceFromValueSettings = ccsSettingListAppend (upgrade->replaceFromValueSettings, (void *) newSetting);
 		upgrade->replaceToValueSettings = ccsSettingListAppend (upgrade->replaceToValueSettings, (void *) s);
@@ -3160,8 +4576,10 @@ Bool
 ccsProcessUpgrade (CCSContext *context,
 		   CCSSettingsUpgrade *upgrade)
 {
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
     IniDictionary      *dict = ccsIniOpen (upgrade->file);
-    CCSPluginList      pl = context->plugins;
+    CCSPluginList      pl = cPrivate->plugins;
     CCSSettingList     sl;
 
     ccsSetProfile (context, upgrade->profile);
@@ -3189,29 +4607,31 @@ ccsProcessUpgrade (CCSContext *context,
     {
 	CCSSetting *tempSetting = (CCSSetting *) sl->data;
 	CCSSetting *setting;
-	
-	setting = ccsFindSetting (tempSetting->parent, tempSetting->name);
-	
+	CCSPlugin  *plugin = ccsSettingGetParent (tempSetting);
+	const char *name = ccsSettingGetName (tempSetting);
+
+	setting = ccsFindSetting (plugin, name);
+
 	if (setting)
 	{
-	    if (setting->type != TypeList)
+	    if (ccsSettingGetType (setting) != TypeList)
 	    {
-		if (setting->value == tempSetting->value)
+		if (ccsSettingGetValue (setting) == ccsSettingGetValue (tempSetting))
 		{
-		    D (D_FULL, "Resetting %s to default\n", ((CCSSetting *) sl->data)->name);
+		    ccsDebug ("Resetting %s to default", ccsSettingGetName ((CCSSetting *) sl->data));
 		    ccsResetToDefault (setting, TRUE);
 		}
 		else
 		{
-		    D (D_FULL, "Skipping processing of %s\n", ((CCSSetting *) sl->data)->name);
+		    ccsDebug ("Skipping processing of %s", ccsSettingGetName ((CCSSetting *) sl->data));
 		}
 	    }
 	    else
 	    {
 		unsigned int count = 0;
 		/* Try and remove any specified items from the list */
-		CCSSettingValueList l = tempSetting->value->value.asList;
-		CCSSettingValueList nl = ccsCopyList (setting->value->value.asList, setting);
+		CCSSettingValueList l = ccsSettingGetValue (tempSetting)->value.asList;
+		CCSSettingValueList nl = ccsCopyList (ccsSettingGetValue (setting)->value.asList, setting);
 
 		while (l)
 		{
@@ -3237,7 +4657,7 @@ ccsProcessUpgrade (CCSContext *context,
 		    l = l->next;
 		}
 
-		D (D_FULL, "Removed %i items from %s\n", count, setting->name);
+		ccsDebug ("Removed %i items from %s", count, ccsSettingGetName (setting));
 		ccsSetList (setting, nl, TRUE);
 
 	    }
@@ -3252,20 +4672,22 @@ ccsProcessUpgrade (CCSContext *context,
     {
 	CCSSetting *tempSetting = (CCSSetting *) sl->data;
 	CCSSetting *setting;
+	CCSPlugin  *plugin = ccsSettingGetParent (tempSetting);
+	const char *name = ccsSettingGetName (tempSetting);
 	
-	setting = ccsFindSetting (tempSetting->parent, tempSetting->name);
+	setting = ccsFindSetting (plugin, name);
 	
 	if (setting)
 	{
-	    D (D_FULL, "Overriding value %s\n", ((CCSSetting *) sl->data)->name);
-	    if (setting->type != TypeList)
-		ccsSetValue (setting, tempSetting->value, TRUE);
+	    ccsDebug ("Overriding value %s", ccsSettingGetName ((CCSSetting *) sl->data));
+	    if (ccsSettingGetType (setting) != TypeList)
+		ccsSetValue (setting, ccsSettingGetValue (tempSetting), TRUE);
 	    else
 	    {
 		unsigned int count = 0;
 		/* Try and apppend any new items to the list */
-		CCSSettingValueList l = tempSetting->value->value.asList;
-		CCSSettingValueList nl = ccsCopyList (setting->value->value.asList, setting);
+		CCSSettingValueList l = ccsSettingGetValue (tempSetting)->value.asList;
+		CCSSettingValueList nl = ccsCopyList (ccsSettingGetValue (setting)->value.asList, setting);
 		
 		while (l)
 		{
@@ -3291,13 +4713,13 @@ ccsProcessUpgrade (CCSContext *context,
 		    l = l->next;
 		}
 
-		D (D_FULL, "Appending %i items to %s\n", count, setting->name);
+		ccsDebug ("Appending %i items to %s", count, ccsSettingGetName (setting));
 		ccsSetList (setting, nl, TRUE);
 	    }
 	}
 	else
 	{
-	    D (D_FULL, "Value %s not found!\n", ((CCSSetting *) sl->data)->name);
+	    ccsDebug ("Value %s not found!", ccsSettingGetName ((CCSSetting *) sl->data));
 	}
 
 	sl = sl->next;
@@ -3309,12 +4731,14 @@ ccsProcessUpgrade (CCSContext *context,
     {
 	CCSSetting *tempSetting = (CCSSetting *) sl->data;
 	CCSSetting *setting;
-	
-	setting = ccsFindSetting (tempSetting->parent, tempSetting->name);
+	CCSPlugin  *plugin = ccsSettingGetParent (tempSetting);
+	const char *name = ccsSettingGetName (tempSetting);
+
+	setting = ccsFindSetting (plugin, name);
 	
 	if (setting)
 	{
-	    if (setting->value == tempSetting->value)
+	    if (ccsSettingGetValue (setting) == ccsSettingGetValue (tempSetting))
 	    {
 		CCSSettingList rl = upgrade->replaceToValueSettings;
 		
@@ -3322,10 +4746,10 @@ ccsProcessUpgrade (CCSContext *context,
 		{
 		    CCSSetting *rsetting = (CCSSetting *) rl->data;
 		    
-		    if (strcmp (rsetting->name, setting->name) == 0)
+		    if (strcmp (ccsSettingGetName (rsetting), ccsSettingGetName (setting)) == 0)
 		    {
-			D (D_FULL, "Matched and replaced %s\n", setting->name);
-			ccsSetValue (setting, rsetting->value, TRUE);
+			ccsDebug ("Matched and replaced %s", ccsSettingGetName (setting));
+			ccsSetValue (setting, ccsSettingGetValue (rsetting), TRUE);
 			break;
 		    }
 		    
@@ -3334,7 +4758,7 @@ ccsProcessUpgrade (CCSContext *context,
 	    }
 	    else
 	    {
-		D (D_FULL, "Skipping processing of %s\n", ((CCSSetting *) sl->data)->name);
+		ccsDebug ("Skipping processing of %s", ccsSettingGetName ((CCSSetting *) sl->data));
 	    }
 	}
 
@@ -3354,150 +4778,84 @@ ccsProcessUpgrade (CCSContext *context,
 static int
 upgradeNameFilter (const struct dirent *name)
 {
-    int length = strlen (name->d_name);
-    char *uname, *tok;
+    return ccsUpgradeNameFilter (name->d_name);
+}
 
-    if (length < 7)
-	return 0;
+void
+ccsFreeUpgrade (CCSSettingsUpgrade *upgrade)
+{
+    if (upgrade->profile)
+	free (upgrade->profile);
 
-    uname = tok = strdup (name->d_name);
+    if (upgrade->domain)
+	free (upgrade->domain);
 
-    /* Keep removing domains and other bits
-     * until we hit a number that we can parse */
-    while (tok)
-    {
-	long int num = 0;
-	char *nexttok = strchr (tok, '.') + 1;
-	char *nextnexttok = strchr (nexttok, '.') + 1;
-	char *end;
-	char *bit = strndup (nexttok, strlen (nexttok) - (strlen (nextnexttok) + 1));
+    if (upgrade->file)
+	free (upgrade->file);
 
-	/* FIXME: That means that the number can't be a zero */
-	errno = 0;
-	num = strtol (bit, &end, 10);
-
-	if (!(errno != 0 && num == 0) &&
-	    end != bit)
-	{
-	    free (bit);
-	    
-	    /* Check if the next token after the number
-	     * is .upgrade */
-
-	    if (strncmp (nextnexttok, "upgrade", 7))
-		return 0;
-	    break;
-	}
-	else if (errno)
-	    perror ("strtol");
-	
-	tok = nexttok;
-	
-	free (bit);
-    }
-
-    free (uname);
-
-    return 1;
-}    
+    free (upgrade);
+}
 
 /*
  * Process a filename into the properties
  * for a settings upgrade
  * eg
- * 
+ *
  * org.freedesktop.compiz.Default.01.upgrade
- * 
+ *
  * gives us:
  * domain: org.freedesktop.compiz
  * number: 1
  * profile: Default
- * 
+ *
  */
 CCSSettingsUpgrade *
-ccsSettingsUpgradeNew (char *path, char *name)
+ccsSettingsUpgradeNew (char *path, const char *name)
 {
     CCSSettingsUpgrade *upgrade = calloc (1, sizeof (CCSSettingsUpgrade));
-    int length = strlen (name);
-    char *uname, *tok;
+    char *upgradeName = strdup (name);
     unsigned int fnlen = strlen (path) + strlen (name) + 1;
 
     upgrade->file = calloc (fnlen + 1, sizeof (char));
     sprintf (upgrade->file, "%s/%s", path, name);
 
-    uname = tok = strdup (name);
+    upgradeName = strdup (name);
 
-    /* Keep removing domains and other bits
-     * until we hit a number that we can parse */
-    while (tok)
+    if (!ccsUpgradeGetDomainNumAndProfile (upgradeName,
+				 &upgrade->domain,
+				 &upgrade->num,
+				 &upgrade->profile))
     {
-	long int num = 0;
-	char *nexttok = strchr (tok, '.') + 1;
-	char *nextnexttok = strchr (nexttok, '.') + 1;
-	char *end;
-	char *bit = strndup (nexttok, strlen (nexttok) - (strlen (nextnexttok) + 1));
-
-	/* FIXME: That means that the number can't be a zero */
-	errno = 0;
-	num = strtol (bit, &end, 10);
-
-	if (!(errno != 0 && num == 0) &&
-	    end != bit)
-	{
-	    upgrade->domain = strndup (uname, length - (strlen (tok) + 1));
-	    upgrade->num = num;
-
-	    /* profile.n.upgrade */
-	    upgrade->profile = strndup (tok, strlen (tok) - (strlen (nexttok) + 1));
-	    free (bit);
-	    break;
-	}
-	else if (errno)
-	    perror ("strtol");
-	
-	tok = nexttok;
-	
-	free (bit);
+	ccsFreeUpgrade (upgrade);
+	upgrade = NULL;
     }
-    
-    free (uname);
-    
+
+    free (upgradeName);
+
     return upgrade;
 }
 
-Bool
-ccsCheckForSettingsUpgrade (CCSContext *context)
+static FILE *
+ccsGetDoneSettingsUpgradeFile (const char *home)
 {
-    struct dirent 	   **nameList;
-    int 	  	   nFile, i;
-    char	  	   *path = DATADIR "/compizconfig/upgrades/";
     char		   *dupath = NULL;
-    FILE		   *completedUpgrades;
+    FILE		   *completedUpgrades = NULL;
+
+    if (asprintf (&dupath, "%s/.config/compiz-1/compizconfig/done_upgrades", home) == -1)
+	return NULL;
+
+    completedUpgrades = fopen (dupath, "a+");
+    free (dupath);
+
+    return completedUpgrades;
+}
+
+static char *
+ccsReadCompletedUpgradesIntoString (FILE *completedUpgrades)
+{
     char		   *cuBuffer;
     unsigned int	   cuSize;
     size_t		   cuReadSize;
-    char		   *home = getenv ("HOME");
-
-    if (!home)
-	return FALSE;
-
-    if (asprintf (&dupath, "%s/.config/compiz-1/compizconfig/done_upgrades", home) == -1)
-	return FALSE;
-
-    completedUpgrades = fopen (dupath, "a+");
-
-    if (!path)
-	return FALSE;
-
-    nFile = scandir (path, &nameList, upgradeNameFilter, alphasort);
-    if (nFile <= 0)
-	return FALSE;
-
-    if (!completedUpgrades)
-    {
-	fprintf (stderr, "[WARNING] Error opening done_upgrades\n");
-	return FALSE;
-    }
 
     fseek (completedUpgrades, 0, SEEK_END);
     cuSize = ftell (completedUpgrades);
@@ -3507,49 +4865,129 @@ ccsCheckForSettingsUpgrade (CCSContext *context)
     cuReadSize = fread (cuBuffer, 1, cuSize, completedUpgrades);
 
     if (cuReadSize != cuSize)
-	D (D_FULL, "[WARNING] Couldn't read completed upgrades file!\n");
+	ccsWarning ("Couldn't read completed upgrades file!");
 
     cuBuffer[cuSize] = '\0';
 
+    return cuBuffer;
+}
+
+static unsigned int
+ccsGetUpgradeFilesForProcessing (const char *upgradePath,
+				 struct dirent ***passedNameList)
+{
+    struct dirent **nameList = NULL;
+    unsigned int nFile = scandir (upgradePath, &nameList, upgradeNameFilter, alphasort);
+
+    if (nFile <= 0)
+	return 0;
+
+    *passedNameList = nameList;
+
+    return nFile;
+}
+
+static Bool
+ccsShouldSkipUpgrade (const char *upgrade,
+		      const char *skipBuffer)
+{
+    char		   *matched = strstr (skipBuffer, upgrade);
+
+    if (matched != NULL)
+    {
+	ccsDebug ("Skipping upgrade %s", upgrade);
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+ccsProcessUpgradeOnce (CCSContext	  *context,
+		       CCSSettingsUpgrade *upgrade,
+		       const char	  *upgradeName,
+		       FILE		  *completedUpgrades)
+{
+    ccsDebug ("Processing upgrade %s\n profile: %s\n number: %i\n domain: %s",
+	      upgradeName,
+	      upgrade->profile,
+	      upgrade->num,
+	      upgrade->domain);
+
+    ccsProcessUpgrade (context, upgrade);
+    ccsWriteChangedSettings (context);
+    ccsWriteAutoSortedPluginList (context);
+    ccsDebug ("Completed upgrade %s", upgradeName);
+
+    fprintf (completedUpgrades, "%s\n", upgradeName);
+    ccsFreeUpgrade (upgrade);
+}
+
+Bool
+ccsCheckForSettingsUpgradeDefault (CCSContext *context)
+{
+    struct dirent 	   **nameList = NULL;
+    int 	  	   nFile, i;
+    char	  	   *path = DATADIR "/compizconfig/upgrades/";
+    FILE		   *completedUpgrades;
+    char		   *cuBuffer = NULL;
+    char		   *home = getenv ("HOME");
+
+    if (!home)
+	return FALSE;
+
+    completedUpgrades = ccsGetDoneSettingsUpgradeFile (home);
+
+    if (!completedUpgrades)
+	return FALSE;
+
+    cuBuffer = ccsReadCompletedUpgradesIntoString (completedUpgrades);
+
+    if (!cuBuffer)
+    {
+	fclose (completedUpgrades);
+	ccsWarning ("Error opening done_upgrades");
+	return FALSE;
+    }
+
+    nFile = ccsGetUpgradeFilesForProcessing (path, &nameList);
+
+    if (!nFile || !nameList)
+    {
+	free (cuBuffer);
+	fclose (completedUpgrades);
+	return FALSE;
+    }
+
     for (i = 0; i < nFile; i++)
     {
-	char		   *matched = strstr (cuBuffer, nameList[i]->d_name);
-	CCSSettingsUpgrade *upgrade;
-	
-	if (matched)
-	{
-	    D (D_FULL, "Skipping upgrade %s\n", nameList[i]->d_name);
+	CCSSettingsUpgrade *upgrade = NULL;
+	const char *upgradeName = nameList[i]->d_name;
+
+	if (ccsShouldSkipUpgrade (upgradeName,
+				  cuBuffer))
 	    continue;
-	}
 
-	upgrade = ccsSettingsUpgradeNew (path, nameList[i]->d_name);
-	
-	D (D_FULL, "Processing upgrade %s\nprofile: %s\nnumber: %i\ndomain: %s\n", nameList[i]->d_name, upgrade->profile, upgrade->num, upgrade->domain);
+	upgrade = ccsSettingsUpgradeNew (path, upgradeName);
 
-	ccsProcessUpgrade (context, upgrade);
-	ccsWriteChangedSettings (context);
-	ccsWriteAutoSortedPluginList (context);
-	D (D_FULL, "Completed upgrade %s\n", nameList[i]->d_name);
-	fprintf (completedUpgrades, "%s\n", nameList[i]->d_name);
-	free (upgrade->profile);
-	free (upgrade->domain);
-	free (upgrade->file);
-	free (upgrade);
+	ccsProcessUpgradeOnce (context, upgrade, upgradeName, completedUpgrades);
+
 	free (nameList[i]);
     }
 
-    free (dupath);
     fclose (completedUpgrades);
     free (cuBuffer);
-    free (nameList);
-    
+
+    if (nameList != NULL)
+	free (nameList);
+
     return TRUE;
 }
 
 Bool
-ccsImportFromFile (CCSContext *context,
-		   const char *fileName,
-		   Bool       overwriteNonDefault)
+ccsImportFromFileDefault (CCSContext *context,
+			  const char *fileName,
+			  Bool       overwriteNonDefault)
 {
     IniDictionary *importFile;
     CCSPluginList p;
@@ -3569,10 +5007,12 @@ ccsImportFromFile (CCSContext *context,
     if (!importFile)
 	return FALSE;
 
-    for (p = context->plugins; p; p = p->next)
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    for (p = cPrivate->plugins; p; p = p->next)
     {
 	plugin = p->data;
-	PLUGIN_PRIV (plugin);
+	CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
 	if (!pPrivate->loaded)
 	    ccsLoadPluginSettings (plugin);
@@ -3580,21 +5020,21 @@ ccsImportFromFile (CCSContext *context,
 	for (s = pPrivate->settings; s; s = s->next)
 	{
 	    setting = s->data;
-	    if (!setting->isDefault && !overwriteNonDefault)
+	    if (!ccsSettingGetIsDefault (setting) && !overwriteNonDefault)
 		continue;
 
 	    if (asprintf (&keyName, "s%d_%s",
-			  context->screenNum, setting->name) == -1)
+			  cPrivate->screenNum, ccsSettingGetName (setting)) == -1)
 		return FALSE;
 
-	    switch (setting->type)
+	    switch (ccsSettingGetType (setting))
 	    {
 	    case TypeBool:
 		{
 		    Bool value;
 
-		    if (ccsIniGetBool (importFile, plugin->name,
-				       keyName, &value))
+		    if (ccsIniGetBool (importFile, ccsPluginGetName (plugin),
+ 				       keyName, &value))
 		    {
 			ccsSetBool (setting, value, TRUE);
 		    }
@@ -3604,7 +5044,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    int value;
 
-		    if (ccsIniGetInt (importFile, plugin->name,
+		    if (ccsIniGetInt (importFile, ccsPluginGetName (plugin),
 				      keyName, &value))
 			ccsSetInt (setting, value, TRUE);
 		}
@@ -3613,7 +5053,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    float value;
 
-		    if (ccsIniGetFloat (importFile, plugin->name,
+		    if (ccsIniGetFloat (importFile, ccsPluginGetName (plugin),
 					keyName, &value))
 			ccsSetFloat (setting, value, TRUE);
 		}
@@ -3622,7 +5062,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    char *value;
 
-		    if (ccsIniGetString (importFile, plugin->name,
+		    if (ccsIniGetString (importFile, ccsPluginGetName (plugin),
 					 keyName, &value))
 		    {
 		    	ccsSetString (setting, value, TRUE);
@@ -3634,7 +5074,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    CCSSettingKeyValue value;
 
-		    if (ccsIniGetKey (importFile, plugin->name,
+		    if (ccsIniGetKey (importFile, ccsPluginGetName (plugin),
 				      keyName, &value))
 			ccsSetKey (setting, value, TRUE);
 		}
@@ -3643,7 +5083,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    CCSSettingButtonValue value;
 
-		    if (ccsIniGetButton (importFile, plugin->name,
+		    if (ccsIniGetButton (importFile, ccsPluginGetName (plugin),
 					 keyName, &value))
 			ccsSetButton (setting, value, TRUE);
 		}
@@ -3652,7 +5092,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    unsigned int value;
 
-		    if (ccsIniGetEdge (importFile, plugin->name,
+		    if (ccsIniGetEdge (importFile, ccsPluginGetName (plugin),
 				       keyName, &value))
 			ccsSetEdge (setting, value, TRUE);
 		}
@@ -3661,7 +5101,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    Bool value;
 
-		    if (ccsIniGetBell (importFile, plugin->name,
+		    if (ccsIniGetBell (importFile, ccsPluginGetName (plugin),
 				       keyName, &value))
 			ccsSetBell (setting, value, TRUE);
 		}
@@ -3670,7 +5110,7 @@ ccsImportFromFile (CCSContext *context,
 		{
 		    CCSSettingColorValue value;
 
-		    if (ccsIniGetColor (importFile, plugin->name,
+		    if (ccsIniGetColor (importFile, ccsPluginGetName (plugin),
 					keyName, &value))
 			ccsSetColor (setting, value, TRUE);
 		}
@@ -3678,7 +5118,7 @@ ccsImportFromFile (CCSContext *context,
 	    case TypeMatch:
 		{
 		    char *value;
-		    if (ccsIniGetString (importFile, plugin->name,
+		    if (ccsIniGetString (importFile, ccsPluginGetName (plugin),
 					 keyName, &value))
 		    {
 		    	ccsSetMatch (setting, value, TRUE);
@@ -3689,7 +5129,7 @@ ccsImportFromFile (CCSContext *context,
 	    case TypeList:
 		{
 		    CCSSettingValueList value;
-		    if (ccsIniGetList (importFile, plugin->name,
+		    if (ccsIniGetList (importFile, ccsPluginGetName (plugin),
 				       keyName, &value, setting))
 		    {
 			ccsSetList (setting, value, TRUE);
@@ -3710,10 +5150,199 @@ ccsImportFromFile (CCSContext *context,
     return TRUE;
 }
 
-CCSSettingList ccsGetPluginSettings (CCSPlugin *plugin)
-
+Bool
+ccsCheckForSettingsUpgrade (CCSContext *context)
 {
-    PLUGIN_PRIV (plugin);
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextCheckForSettingsUpgrade) (context);
+}
+
+Bool
+ccsImportFromFile (CCSContext *context, const char *fileName, Bool overwriteNonDefault)
+{
+    if (!context)
+	return FALSE;
+
+    return (*(GET_INTERFACE (CCSContextInterface, context))->contextImportFromFile) (context, fileName, overwriteNonDefault);
+}
+
+char *
+ccsPluginGetNameDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->name;
+}
+
+char * ccsPluginGetShortDescDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->shortDesc;
+}
+
+char * ccsPluginGetLongDescDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->longDesc;
+}
+
+char * ccsPluginGetHintsDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->hints;
+}
+
+char * ccsPluginGetCategoryDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->category;
+}
+
+CCSStringList ccsPluginGetLoadAfterDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->loadAfter;
+}
+
+CCSStringList ccsPluginGetLoadBeforeDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->loadBefore;
+}
+
+CCSStringList ccsPluginGetRequiresPluginsDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->requiresPlugin;
+}
+
+CCSStringList ccsPluginGetConflictPluginsDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->conflictPlugin;
+}
+
+CCSStringList ccsPluginGetProvidesFeaturesDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->providesFeature;
+}
+
+void * ccsPluginGetProvidesFeaturesBindable (CCSPlugin *plugin)
+{
+    return (void *) ccsPluginGetProvidesFeatures (plugin);
+}
+
+CCSStringList ccsPluginGetRequiresFeaturesDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->requiresFeature;
+}
+
+void * ccsPluginGetPrivatePtrDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->privatePtr;
+}
+
+void ccsPluginSetPrivatePtrDefault (CCSPlugin *plugin, void *ptr)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    pPrivate->privatePtr = ptr;
+}
+
+CCSContext * ccsPluginGetContextDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
+
+    return pPrivate->context;
+}
+
+/* CCSPlugin accessor functions */
+char * ccsPluginGetName (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetName) (plugin);
+}
+
+char * ccsPluginGetShortDesc (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetShortDesc) (plugin);
+}
+
+char * ccsPluginGetLongDesc (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetLongDesc) (plugin);
+}
+
+char * ccsPluginGetHints (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetHints) (plugin);
+}
+
+char * ccsPluginGetCategory (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetCategory) (plugin);
+}
+
+CCSStringList ccsPluginGetLoadAfter (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetLoadAfter) (plugin);
+}
+
+CCSStringList ccsPluginGetLoadBefore (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetLoadBefore) (plugin);
+}
+
+CCSStringList ccsPluginGetRequiresPlugins (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetRequiresPlugins) (plugin);
+}
+
+CCSStringList ccsPluginGetConflictPlugins (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetConflictPlugins) (plugin);
+}
+
+CCSStringList ccsPluginGetProvidesFeatures (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetProvidesFeatures) (plugin);
+}
+
+CCSStringList ccsPluginGetRequiresFeatures (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetRequiresFeatures) (plugin);
+}
+
+void * ccsPluginGetPrivatePtr (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetPrivatePtr) (plugin);
+}
+
+void ccsPluginSetPrivatePtr (CCSPlugin *plugin, void *ptr)
+{
+    (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginSetPrivatePtr) (plugin, ptr);
+}
+
+CCSContext * ccsPluginGetContext (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetContext) (plugin);
+}
+
+CCSSettingList ccsGetPluginSettingsDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
     if (!pPrivate->loaded)
 	ccsLoadPluginSettings (plugin);
@@ -3721,9 +5350,14 @@ CCSSettingList ccsGetPluginSettings (CCSPlugin *plugin)
     return pPrivate->settings;
 }
 
-CCSGroupList ccsGetPluginGroups (CCSPlugin *plugin)
+CCSSettingList ccsGetPluginSettings (CCSPlugin *plugin)
 {
-    PLUGIN_PRIV (plugin);
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetPluginSettings) (plugin);
+}
+
+CCSGroupList ccsGetPluginGroupsDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
     if (!pPrivate->loaded)
 	ccsLoadPluginSettings (plugin);
@@ -3731,41 +5365,270 @@ CCSGroupList ccsGetPluginGroups (CCSPlugin *plugin)
     return pPrivate->groups;
 }
 
-Bool ccsSettingIsIntegrated (CCSSetting *setting)
+CCSGroupList ccsGetPluginGroups (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetPluginGroups) (plugin);
+}
+
+char * ccsSettingGetName (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetName) (setting);
+}
+
+char * ccsSettingGetShortDesc (CCSSetting *setting)
+
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetShortDesc) (setting);
+}
+
+char * ccsSettingGetLongDesc (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetLongDesc) (setting);
+}
+
+CCSSettingType ccsSettingGetType (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetType) (setting);
+}
+
+CCSSettingInfo * ccsSettingGetInfo (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetInfo) (setting);
+}
+
+char * ccsSettingGetGroup (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetGroup) (setting);
+}
+
+char * ccsSettingGetSubGroup (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetSubGroup) (setting);
+}
+
+char * ccsSettingGetHints (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetHints) (setting);
+}
+
+CCSSettingValue * ccsSettingGetDefaultValue (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetDefaultValue) (setting);
+}
+
+CCSSettingValue *ccsSettingGetValue (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetValue) (setting);
+}
+
+Bool ccsSettingGetIsDefault (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetIsDefault) (setting);
+}
+
+CCSPlugin * ccsSettingGetParent (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetParent) (setting);
+}
+
+void * ccsSettingGetPrivatePtr (CCSSetting *setting)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingGetPrivatePtr) (setting);
+}
+
+void ccsSettingSetPrivatePtr (CCSSetting *setting, void *ptr)
+{
+    return (*(GET_INTERFACE (CCSSettingInterface, setting))->settingSetPrivatePtr) (setting, ptr);
+}
+
+Bool ccsSettingGetIsIntegratedDefault (CCSSetting *setting)
 {
     if (!setting)
 	return FALSE;
 
-    CONTEXT_PRIV (setting->parent->context);
+    CCSPlugin *plugin = ccsSettingGetParent (setting);
+    CCSContext *context = ccsPluginGetContext (plugin);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     if (!cPrivate->backend)
 	return FALSE;
 
-    if (cPrivate->backend->vTable->getSettingIsIntegrated)
-	return (*cPrivate->backend->vTable->getSettingIsIntegrated) (setting);
+    if (ccsDynamicBackendSupportsIntegration (cPrivate->backend))
+	return ccsBackendGetSettingIsIntegrated ((CCSBackend *) cPrivate->backend, setting);
 
     return FALSE;
 }
 
-Bool ccsSettingIsReadOnly (CCSSetting *setting)
+Bool ccsSettingGetIsReadOnlyDefault (CCSSetting *setting)
 {
     if (!setting)
 	return FALSE;
 
-    CONTEXT_PRIV (setting->parent->context);
+    CCSPlugin *plugin = ccsSettingGetParent (setting);
+    CCSContext *context = ccsPluginGetContext (plugin);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
 
     if (!cPrivate->backend)
 	return FALSE;
 
-    if (cPrivate->backend->vTable->getSettingIsReadOnly)
-	return (*cPrivate->backend->vTable->getSettingIsReadOnly) (setting);
+    return ccsBackendGetSettingIsReadOnly ((CCSBackend *) cPrivate->backend, setting);
+}
+
+Bool ccsSettingGetIsReadableByBackendDefault (CCSSetting *setting)
+{
+    static const CCSSettingType readableSettingTypes[] =
+    {
+	TypeBool,
+	TypeInt,
+	TypeFloat,
+	TypeString,
+	TypeColor,
+	TypeKey,
+	TypeButton,
+	TypeEdge,
+	TypeBell,
+	TypeMatch,
+	TypeList
+    };
+    static const unsigned int readableSettingTypesNum = sizeof (readableSettingTypes) / sizeof (readableSettingTypes[0]);
+    int i = 0;
+    Bool isReadableType = FALSE;
+    CCSSettingType type;
+
+    CCSPlugin *plugin = ccsSettingGetParent (setting);
+    CCSContext *context = ccsPluginGetContext (plugin);
+    CCSContextPrivate *cPrivate = GET_PRIVATE (CCSContextPrivate, context);
+
+    if (!cPrivate->backend)
+	return FALSE;
+
+    type = ccsSettingGetType (setting);
+
+    /* It is impossible for certain settings to have a schema,
+     * such as actions and read only settings, so in that case
+     * just return FALSE since compizconfig doesn't expect us
+     * to read them anyways */
+    for (i = 0; i < readableSettingTypesNum; ++i)
+    {
+	if (readableSettingTypes[i] == type)
+	{
+	    isReadableType = TRUE;
+	    break;
+	}
+    }
+
+    if (isReadableType &&
+	!ccsSettingIsReadOnly (setting))
+    {
+	return TRUE;
+    }
 
     return FALSE;
 }
 
-CCSStrExtensionList ccsGetPluginStrExtensions (CCSPlugin *plugin)
+/* Interface for CCSSetting */
+char *
+ccsSettingGetNameDefault (CCSSetting *setting)
 {
-    PLUGIN_PRIV (plugin);
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->name;
+}
+
+char * ccsSettingGetShortDescDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->shortDesc;
+}
+
+char * ccsSettingGetLongDescDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->longDesc;
+}
+
+CCSSettingType ccsSettingGetTypeDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->type;
+}
+
+CCSSettingInfo * ccsSettingGetInfoDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return &sPrivate->info;
+}
+
+char * ccsSettingGetGroupDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->group;
+}
+
+char * ccsSettingGetSubGroupDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->subGroup;
+}
+
+char * ccsSettingGetHintsDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->hints;
+}
+
+CCSSettingValue * ccsSettingGetDefaultValueDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return &sPrivate->defaultValue;
+}
+
+CCSSettingValue * ccsSettingGetValueDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->value;
+}
+
+Bool ccsSettingGetIsDefaultDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->isDefault;
+}
+
+CCSPlugin * ccsSettingGetParentDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->parent;
+}
+
+void * ccsSettingGetPrivatePtrDefault (CCSSetting *setting)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    return sPrivate->privatePtr;
+}
+
+void ccsSettingSetPrivatePtrDefault (CCSSetting *setting, void *ptr)
+{
+    CCSSettingPrivate *sPrivate = GET_PRIVATE (CCSSettingPrivate, setting);
+
+    sPrivate->privatePtr = ptr;
+}
+
+CCSStrExtensionList ccsGetPluginStrExtensionsDefault (CCSPlugin *plugin)
+{
+    CCSPluginPrivate *pPrivate = GET_PRIVATE (CCSPluginPrivate, plugin);
 
     if (!pPrivate->loaded)
 	ccsLoadPluginSettings (plugin);
@@ -3773,3 +5636,449 @@ CCSStrExtensionList ccsGetPluginStrExtensions (CCSPlugin *plugin)
     return pPrivate->stringExtensions;
 }
 
+CCSStrExtensionList ccsGetPluginStrExtensions (CCSPlugin *plugin)
+{
+    return (*(GET_INTERFACE (CCSPluginInterface, plugin))->pluginGetPluginStrExtensions) (plugin);
+}
+
+CCSSettingValue * ccsIntegratedSettingReadValue (CCSIntegratedSetting *setting, CCSSettingType type)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingInterface, setting))->readValue) (setting, type);
+}
+
+void ccsIntegratedSettingWriteValue (CCSIntegratedSetting *setting, CCSSettingValue *value, CCSSettingType type)
+{
+    (*(GET_INTERFACE (CCSIntegratedSettingInterface, setting))->writeValue) (setting, value, type);
+}
+
+const char * ccsIntegratedSettingInfoPluginName (CCSIntegratedSettingInfo *info)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingInfoInterface, info))->pluginName) (info);
+}
+
+const char * ccsIntegratedSettingInfoSettingName (CCSIntegratedSettingInfo *info)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingInfoInterface, info))->settingName) (info);
+}
+
+CCSSettingType ccsIntegratedSettingInfoGetType (CCSIntegratedSettingInfo *info)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingInfoInterface, info))->getType) (info);
+}
+
+void ccsFreeIntegratedSettingInfo (CCSIntegratedSettingInfo *info)
+{
+    (*(GET_INTERFACE (CCSIntegratedSettingInfoInterface, info))->free) (info);
+}
+
+void ccsFreeIntegratedSetting (CCSIntegratedSetting *setting)
+{
+    (*(GET_INTERFACE (CCSIntegratedSettingInterface, setting))->free) (setting);
+}
+
+/* CCSSharedIntegratedSettingInfo implementation */
+
+typedef struct _CCSSharedIntegratedSettingInfoPrivate CCSSharedIntegratedSettingInfoPrivate;
+
+struct _CCSSharedIntegratedSettingInfoPrivate
+{
+    const char *pluginName;
+    const char *settingName;
+    CCSSettingType type;
+};
+
+static const char *
+ccsSharedIntegratedSettingInfoSettingName (CCSIntegratedSettingInfo *setting)
+{
+    CCSSharedIntegratedSettingInfoPrivate *priv = (CCSSharedIntegratedSettingInfoPrivate *) ccsObjectGetPrivate (setting);
+
+    return priv->settingName;
+}
+
+static const char *
+ccsSharedIntegratedSettingInfoPluginName (CCSIntegratedSettingInfo *setting)
+{
+    CCSSharedIntegratedSettingInfoPrivate *priv = (CCSSharedIntegratedSettingInfoPrivate *) ccsObjectGetPrivate (setting);
+
+    return priv->pluginName;
+}
+
+static CCSSettingType
+ccsSharedIntegratedSettingInfoGetType (CCSIntegratedSettingInfo *setting)
+{
+    CCSSharedIntegratedSettingInfoPrivate *priv = (CCSSharedIntegratedSettingInfoPrivate *) ccsObjectGetPrivate (setting);
+
+    return priv->type;
+}
+
+static void
+ccsSharedIntegratedSettingInfoFree (CCSIntegratedSettingInfo *setting)
+{
+    ccsObjectFinalize (setting);
+    (*setting->object.object_allocation->free_) (setting->object.object_allocation->allocator, setting);
+}
+
+const CCSIntegratedSettingInfoInterface ccsSharedIntegratedSettingInfoInterface =
+{
+    ccsSharedIntegratedSettingInfoPluginName,
+    ccsSharedIntegratedSettingInfoSettingName,
+    ccsSharedIntegratedSettingInfoGetType,
+    ccsSharedIntegratedSettingInfoFree
+};
+
+CCSIntegratedSettingInfo *
+ccsSharedIntegratedSettingInfoNew (const char *pluginName,
+				   const char *settingName,
+				   CCSSettingType type,
+				   CCSObjectAllocationInterface *ai)
+{
+    CCSIntegratedSettingInfo *info = (*ai->calloc_) (ai->allocator, 1, sizeof (CCSIntegratedSetting));
+
+    if (!info)
+	return NULL;
+
+    CCSSharedIntegratedSettingInfoPrivate *priv = (*ai->calloc_) (ai->allocator, 1, sizeof (CCSSharedIntegratedSettingInfoPrivate));
+
+    if (!priv)
+    {
+	(*ai->free_) (ai->allocator, info);
+	return NULL;
+    }
+
+    priv->pluginName = pluginName;
+    priv->settingName = settingName;
+    priv->type = type;
+
+    ccsObjectInit (info, ai);
+    ccsObjectSetPrivate (info, (CCSPrivate *) priv);
+    ccsObjectAddInterface (info, (const CCSInterface *) &ccsSharedIntegratedSettingInfoInterface, GET_INTERFACE_TYPE (CCSIntegratedSettingInfoInterface));
+    ccsIntegratedSettingInfoRef (info);
+
+    return info;
+}
+
+CCSIntegratedSettingList
+ccsIntegratedSettingsStorageFindMatchingSettingsByPredicate (CCSIntegratedSettingsStorage *storage,
+							     CCSIntegratedSettingsStorageFindPredicate pred,
+							     void			  *data)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingsStorageInterface, storage))->findMatchingSettingsByPredicate) (storage, pred, data);
+}
+
+CCSIntegratedSettingList
+ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (CCSIntegratedSettingsStorage *storage,
+									const char *pluginName,
+									const char *settingName)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingsStorageInterface, storage))->findMatchingSettingsByPluginAndSettingName) (storage, pluginName, settingName);
+}
+
+void
+ccsIntegratedSettingsStorageAddSetting (CCSIntegratedSettingsStorage *storage,
+					CCSIntegratedSetting	     *setting)
+{
+    (*(GET_INTERFACE (CCSIntegratedSettingsStorageInterface, storage))->addSetting) (storage, setting);
+}
+
+Bool
+ccsIntegratedSettingsStorageEmpty (CCSIntegratedSettingsStorage *storage)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingsStorageInterface, storage))->empty) (storage);
+}
+
+void
+ccsFreeIntegratedSettingsStorage (CCSIntegratedSettingsStorage *storage)
+{
+    (*(GET_INTERFACE (CCSIntegratedSettingsStorageInterface, storage))->empty) (storage);
+}
+
+/* CCSIntegratedSettingsStorageDefault implementation */
+typedef struct _CCSIntegratedSettingsStorageDefaultPrivate CCSIntegratedSettingsStorageDefaultPrivate;
+
+struct _CCSIntegratedSettingsStorageDefaultPrivate
+{
+    CCSIntegratedSettingList settingList;
+};
+
+typedef struct _CCSIntegratedSettingsStorageFindByNamesData
+{
+    const char *pluginName;
+    const char *settingName;
+} CCSIntegratedSettingsStorageFindByNamesData;
+
+static Bool
+ccsIntegratedSettingsStorageFindByNamesPredicate (CCSIntegratedSetting *setting,
+						  void		       *data)
+{
+    CCSIntegratedSettingsStorageFindByNamesData *findNamesData = (CCSIntegratedSettingsStorageFindByNamesData *) data;
+
+    const char *sPluginName = ccsIntegratedSettingInfoPluginName ((CCSIntegratedSettingInfo *) setting);
+    const char *sSettingName = ccsIntegratedSettingInfoSettingName ((CCSIntegratedSettingInfo *) setting);
+
+    if (strcmp (sPluginName, findNamesData->pluginName) == 0 &&
+	strcmp (sSettingName, findNamesData->settingName) == 0)
+    {
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+CCSIntegratedSettingList
+ccsIntegratedSettingsStorageDefaultFindMatchingSettingsByPredicate (CCSIntegratedSettingsStorage *storage,
+								    CCSIntegratedSettingsStorageFindPredicate pred,
+								    void			 *data)
+{
+    CCSIntegratedSettingsStorageDefaultPrivate *priv = (CCSIntegratedSettingsStorageDefaultPrivate *) ccsObjectGetPrivate (storage);
+    CCSIntegratedSettingList		       returnList = NULL;
+    CCSIntegratedSettingList		       iter = priv->settingList;
+
+    while (iter)
+    {
+	if ((*pred) (iter->data, data))
+	    returnList = ccsIntegratedSettingListAppend (returnList, iter->data);
+
+	iter = iter->next;
+    }
+
+    return returnList;
+}
+
+CCSIntegratedSettingList
+ccsIntegratedSettingsStorageDefaultFindMatchingSettingsByPluginAndSettingName (CCSIntegratedSettingsStorage *storage,
+									       const char *pluginName,
+									       const char *settingName)
+{
+    CCSIntegratedSettingsStorageFindByNamesData data =
+    {
+	pluginName,
+	settingName
+    };
+
+    return ccsIntegratedSettingsStorageFindMatchingSettingsByPredicate (storage, ccsIntegratedSettingsStorageFindByNamesPredicate, (void *) &data);
+}
+
+void
+ccsIntegratedSettingsStorageDefaultAddSetting (CCSIntegratedSettingsStorage *storage,
+					       CCSIntegratedSetting	    *setting)
+{
+    CCSIntegratedSettingsStorageDefaultPrivate *priv = (CCSIntegratedSettingsStorageDefaultPrivate *) ccsObjectGetPrivate (storage);
+    priv->settingList = ccsIntegratedSettingListAppend (priv->settingList, setting);
+}
+
+Bool
+ccsIntegratedSettingsStorageDefaultEmpty (CCSIntegratedSettingsStorage *storage)
+{
+    CCSIntegratedSettingsStorageDefaultPrivate *priv = (CCSIntegratedSettingsStorageDefaultPrivate *) ccsObjectGetPrivate (storage);
+    return priv->settingList == NULL;
+}
+
+void
+ccsIntegratedSettingsStorageDefaultImplFree (CCSIntegratedSettingsStorage *storage)
+{
+    CCSIntegratedSettingsStorageDefaultPrivate *priv = (CCSIntegratedSettingsStorageDefaultPrivate *) ccsObjectGetPrivate (storage);
+
+    if (priv->settingList)
+	ccsIntegratedSettingListFree (priv->settingList, TRUE);
+
+    ccsObjectFinalize (storage);
+    (*storage->object.object_allocation->free_) (storage->object.object_allocation->allocator, storage);
+}
+
+const CCSIntegratedSettingsStorageInterface ccsIntegratedSettingsStorageDefaultImplInterface =
+{
+    ccsIntegratedSettingsStorageDefaultFindMatchingSettingsByPredicate,
+    ccsIntegratedSettingsStorageDefaultFindMatchingSettingsByPluginAndSettingName,
+    ccsIntegratedSettingsStorageDefaultAddSetting,
+    ccsIntegratedSettingsStorageDefaultEmpty,
+    ccsIntegratedSettingsStorageDefaultImplFree
+};
+
+CCSIntegratedSettingsStorage *
+ccsIntegratedSettingsStorageDefaultImplNew (CCSObjectAllocationInterface *ai)
+{
+    CCSIntegratedSettingsStorage *storage = (*ai->calloc_) (ai->allocator, 1, sizeof (CCSIntegratedSettingsStorage));
+
+    if (!storage)
+	return NULL;
+
+    CCSIntegratedSettingsStorageDefaultPrivate *priv = (*ai->calloc_) (ai->allocator, 1, sizeof (CCSIntegratedSettingsStorageDefaultPrivate));
+
+    if (!priv)
+    {
+	(*ai->free_) (ai->allocator, storage);
+	return NULL;
+    }
+
+    ccsObjectInit (storage, ai);
+    ccsObjectSetPrivate (storage, (CCSPrivate *) priv);
+    ccsObjectAddInterface (storage, (const CCSInterface *) &ccsIntegratedSettingsStorageDefaultImplInterface, GET_INTERFACE_TYPE (CCSIntegratedSettingsStorageInterface));
+
+    ccsIntegratedSettingsStorageRef (storage);
+
+    return storage;
+}
+
+CCSIntegratedSetting *
+ccsIntegratedSettingFactoryCreateIntegratedSettingForCCSSettingNameAndType (CCSIntegratedSettingFactory *factory,
+									    CCSIntegration	        *integration,
+									    const char *pluginName,
+									    const char *settingName,
+									    CCSSettingType type)
+{
+    return (*(GET_INTERFACE (CCSIntegratedSettingFactoryInterface, factory))->createIntegratedSettingForCCSSettingNameAndType) (factory, integration, pluginName, settingName, type);
+}
+
+void
+ccsFreeIntegratedSettingFactory (CCSIntegratedSettingFactory *factory)
+{
+    (*(GET_INTERFACE (CCSIntegratedSettingFactoryInterface, factory))->free) (factory);
+}
+
+static  const CCSPluginInterface ccsDefaultPluginInterface =
+{
+    ccsPluginGetNameDefault,
+    ccsPluginGetShortDescDefault,
+    ccsPluginGetLongDescDefault,
+    ccsPluginGetHintsDefault,
+    ccsPluginGetCategoryDefault,
+    ccsPluginGetLoadAfterDefault,
+    ccsPluginGetLoadBeforeDefault,
+    ccsPluginGetRequiresPluginsDefault,
+    ccsPluginGetConflictPluginsDefault,
+    ccsPluginGetProvidesFeaturesDefault,
+    ccsPluginGetRequiresFeaturesDefault,
+    ccsPluginGetPrivatePtrDefault,
+    ccsPluginSetPrivatePtrDefault,
+    ccsPluginGetContextDefault,
+    ccsFindSettingDefault,
+    ccsGetPluginSettingsDefault,
+    ccsGetPluginGroupsDefault,
+    ccsReadPluginSettingsDefault,
+    ccsGetPluginStrExtensionsDefault,
+    ccsFreePluginDefault
+};
+
+static const CCSContextInterface ccsDefaultContextInterface =
+{
+    ccsContextGetPluginsDefault,
+    ccsContextGetCategoriesDefault,
+    ccsContextGetChangedSettingsDefault,
+    ccsContextGetScreenNumDefault,
+    ccsContextAddChangedSettingDefault,
+    ccsContextClearChangedSettingsDefault,
+    ccsContextStealChangedSettingsDefault,
+    ccsContextGetPrivatePtrDefault,
+    ccsContextSetPrivatePtrDefault,
+    ccsLoadPluginDefault,
+    ccsFindPluginDefault,
+    ccsPluginIsActiveDefault,
+    ccsGetActivePluginListDefault,
+    ccsGetSortedPluginStringListDefault,
+    ccsSetBackendDefault,
+    ccsGetBackendDefault,
+    ccsSetIntegrationEnabledDefault,
+    ccsSetProfileDefault,
+    ccsSetPluginListAutoSortDefault,
+    ccsGetProfileDefault,
+    ccsGetIntegrationEnabledDefault,
+    ccsGetPluginListAutoSortDefault,
+    ccsProcessEventsDefault,
+    ccsReadSettingsDefault,
+    ccsWriteSettingsDefault,
+    ccsWriteChangedSettingsDefault,
+    ccsExportToFileDefault,
+    ccsImportFromFileDefault,
+    ccsCanEnablePluginDefault,
+    ccsCanDisablePluginDefault,
+    ccsGetExistingProfilesDefault,
+    ccsDeleteProfileDefault,
+    ccsCheckForSettingsUpgradeDefault,
+    ccsLoadPluginsDefault,
+    ccsFreeContextDefault
+};
+
+static const CCSSettingInterface ccsDefaultSettingInterface =
+{
+    ccsSettingGetNameDefault,
+    ccsSettingGetShortDescDefault,
+    ccsSettingGetLongDescDefault,
+    ccsSettingGetTypeDefault,
+    ccsSettingGetInfoDefault,
+    ccsSettingGetGroupDefault,
+    ccsSettingGetSubGroupDefault,
+    ccsSettingGetHintsDefault,
+    ccsSettingGetDefaultValueDefault,
+    ccsSettingGetValueDefault,
+    ccsSettingGetIsDefaultDefault,
+    ccsSettingGetParentDefault,
+    ccsSettingGetPrivatePtrDefault,
+    ccsSettingSetPrivatePtrDefault,
+    ccsSettingSetIntDefault,
+    ccsSettingSetFloatDefault,
+    ccsSettingSetBoolDefault,
+    ccsSettingSetStringDefault,
+    ccsSettingSetColorDefault,
+    ccsSettingSetMatchDefault,
+    ccsSettingSetKeyDefault,
+    ccsSettingSetButtonDefault,
+    ccsSettingSetEdgeDefault,
+    ccsSettingSetBellDefault,
+    ccsSettingSetListDefault,
+    ccsSettingSetValueDefault,
+    ccsSettingGetIntDefault,
+    ccsSettingGetFloatDefault,
+    ccsSettingGetBoolDefault,
+    ccsSettingGetStringDefault,
+    ccsSettingGetColorDefault,
+    ccsSettingGetMatchDefault,
+    ccsSettingGetKeyDefault,
+    ccsSettingGetButtonDefault,
+    ccsSettingGetEdgeDefault,
+    ccsSettingGetBellDefault,
+    ccsSettingGetListDefault,
+    ccsSettingResetToDefaultDefault,
+    ccsSettingGetIsIntegratedDefault,
+    ccsSettingGetIsReadOnlyDefault,
+    ccsSettingGetIsReadableByBackendDefault,
+    ccsFreeSettingDefault
+};
+
+const CCSBackendInterface ccsDynamicBackendInterfaceWrapper =
+{
+    ccsDynamicBackendGetInfoWrapper,
+    ccsDynamicBackendExecuteEventsWrapper,
+    ccsDynamicBackendInitWrapper,
+    ccsDynamicBackendFiniWrapper,
+    ccsDynamicBackendReadInitWrapper,
+    ccsDynamicBackendReadSettingWrapper,
+    ccsDynamicBackendReadDoneWrapper,
+    ccsDynamicBackendWriteInitWrapper,
+    ccsDynamicBackendWriteSettingWrapper,
+    ccsDynamicBackendWriteDoneWrapper,
+    ccsDynamicBackendUpdateSettingWrapper,
+    ccsDynamicBackendGetSettingIsIntegratedWrapper,
+    ccsDynamicBackendGetSettingIsReadOnlyWrapper,
+    ccsDynamicBackendGetExistingProfilesWrapper,
+    ccsDynamicBackendDeleteProfileWrapper,
+    ccsDynamicBackendSetIntegrationWrapper
+};
+
+const CCSDynamicBackendInterface ccsDefaultDynamicBackendInterface =
+{
+    ccsDynamicBackendGetBackendNameDefault,
+    ccsDynamicBackendSupportsReadDefault,
+    ccsDynamicBackendSupportsWriteDefault,
+    ccsDynamicBackendSupportsIntegrationDefault,
+    ccsDynamicBackendSupportsProfilesDefault,
+    ccsDynamicBackendGetRawBackendDefault
+};
+
+const CCSInterfaceTable ccsDefaultInterfaceTable =
+{
+    &ccsDefaultContextInterface,
+    &ccsDefaultPluginInterface,
+    &ccsDefaultSettingInterface,
+    &ccsDynamicBackendInterfaceWrapper,
+    &ccsDefaultDynamicBackendInterface
+};

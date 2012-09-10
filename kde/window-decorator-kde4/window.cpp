@@ -346,10 +346,70 @@ KWD::Window::icon (void) const
     return icon;
 }
 
+QIcon
+KWD::Window::icon (int idx) const
+{
+    return icon ();
+}
+
 QString
 KWD::Window::caption (void) const
 {
     return mName;
+}
+
+QString
+KWD::Window::caption (int idx) const
+{
+    return caption ();
+}
+
+int
+KWD::Window::tabCount () const
+{
+    return 0;
+}
+
+long
+KWD::Window::tabId (int idx) const
+{
+    return 0;
+}
+
+long
+KWD::Window::currentTabId () const
+{
+    return 0;
+}
+
+void
+KWD::Window::setCurrentTab (long id)
+{
+}
+
+void
+KWD::Window::tab_A_before_B (long A, long B)
+{
+}
+
+void
+KWD::Window::tab_A_behind_B (long A, long B)
+{
+}
+
+void
+KWD::Window::untab (long id, const QRect& newGeom)
+{
+}
+
+void
+KWD::Window::closeTab (long id)
+{
+}
+
+void
+KWD::Window::closeTabGroup ()
+{
 }
 
 /* TODO: We should use libtaskmanager, which is part of kdebase to create
@@ -480,6 +540,12 @@ KWD::Window::showWindowMenu (const QPoint &pos)
 		   mGeometry.y () - mBorder.top - mPadding.top);
 
     mPopup->exec (pnt);
+}
+
+void
+KWD::Window::showWindowMenu (const QPoint &pos, long id)
+{
+    showWindowMenu (pos);
 }
 
 void
@@ -1150,7 +1216,6 @@ KWD::Window::updateProperty (long         *data,
     unsigned int    frameType = 0xffffff;
     unsigned int    frameState = 0;
     unsigned int    frameActions = 0;
-    int		    nQuad = 0;
     int             left, right, top, bottom, width, height;
     unsigned int    saveState;
     bool            allocated = false;
@@ -1204,6 +1269,7 @@ KWD::Window::updateProperty (long         *data,
 
     if (mType != Normal2D)
     {
+      int nQuad = 0;
       if (!data)
       {
           allocated = true;

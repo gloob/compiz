@@ -382,7 +382,7 @@ ccsIniParseList (const char	     *str,
     }
 
     token = strsep (&valueString, ";");
-    switch (parent->info.forList.listType)
+    switch (ccsSettingGetInfo (parent)->forList.listType)
     {
     case TypeString:
     case TypeMatch:
@@ -397,7 +397,7 @@ ccsIniParseList (const char	     *str,
 		token = strsep (&valueString, ";");
 	    }
 
-	    list = ccsGetValueListFromStringArray (array, nItems, parent);
+	    list = ccsGetValueListFromStringArray ((const char **) array, nItems, parent);
 
 	    for (i = 0; i < nItems; i++)
 		free (array[i]);

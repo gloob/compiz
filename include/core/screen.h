@@ -69,15 +69,15 @@ extern unsigned int pointerMods;
 #define NOTIFY_MOVE_MASK   (1 << 2)
 #define NOTIFY_MODIFY_MASK (1 << 3)
 
-#define SCREEN_EDGE_LEFT	0
-#define SCREEN_EDGE_RIGHT	1
-#define SCREEN_EDGE_TOP		2
-#define SCREEN_EDGE_BOTTOM	3
-#define SCREEN_EDGE_TOPLEFT	4
-#define SCREEN_EDGE_TOPRIGHT	5
-#define SCREEN_EDGE_BOTTOMLEFT	6
-#define SCREEN_EDGE_BOTTOMRIGHT 7
-#define SCREEN_EDGE_NUM		8
+#define SCREEN_EDGE_LEFT	    0
+#define SCREEN_EDGE_RIGHT	    1
+#define SCREEN_EDGE_TOP		    2
+#define SCREEN_EDGE_BOTTOM	    3
+#define SCREEN_EDGE_TOPLEFT	    4
+#define SCREEN_EDGE_TOPRIGHT	    5
+#define SCREEN_EDGE_BOTTOMLEFT	    6
+#define SCREEN_EDGE_BOTTOMRIGHT	    7
+#define SCREEN_EDGE_NUM		    8
 
 typedef boost::function<void (short int)> FdWatchCallBack;
 typedef boost::function<void (const char *)> FileWatchCallBack;
@@ -401,7 +401,8 @@ public:
     virtual void updatePassiveKeyGrabs () const = 0;
     virtual void applyStartupProperties (CompWindow *window) = 0;
     virtual void updateClientList() = 0;
-    virtual Window getTopWindow() const = 0;
+    virtual CompWindow * getTopWindow() const = 0;
+    virtual CompWindow * getTopServerWindow() const = 0;
     virtual CoreOptions& getCoreOptions() = 0;
     virtual Colormap colormap() const = 0;
     virtual void setCurrentDesktop (unsigned int desktop) = 0;

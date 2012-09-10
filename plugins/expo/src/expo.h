@@ -86,6 +86,7 @@ class ExpoScreen :
 
 	CompPoint prevCursor;
 	CompPoint newCursor;
+	CompPoint prevClickPoint;
 
 	CompPoint origVp;
 	CompPoint selectedVp;
@@ -109,7 +110,6 @@ class ExpoScreen :
 	float curveRadius;
 
 	std::vector<GLfloat> vpNormals;
-	std::vector<GLfloat> winNormals;
 
 	CompScreen::GrabHandle grabIndex;
 
@@ -141,15 +141,15 @@ class ExpoWindow :
 
 	bool damageRect (bool, const CompRect&);
 
-	bool glDraw (const GLMatrix&, GLFragment::Attrib&,
+	bool glDraw (const GLMatrix&, const GLWindowPaintAttrib&,
 		     const CompRegion&, unsigned int);
 	bool glPaint (const GLWindowPaintAttrib&, const GLMatrix&,
 		      const CompRegion&, unsigned int);
 	void glAddGeometry (const GLTexture::MatrixList&,
 			    const CompRegion&, const CompRegion&,
 			    unsigned int, unsigned int);
-	void glDrawTexture (GLTexture *, GLFragment::Attrib& attrib,
-			    unsigned int);
+	void glDrawTexture (GLTexture*, const GLMatrix&,
+	                    const GLWindowPaintAttrib&, unsigned int);
 
 	CompWindow      *window;
 	CompositeWindow *cWindow;

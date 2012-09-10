@@ -27,6 +27,10 @@
 
 COMPIZ_PLUGIN_20090315 (obs, ObsPluginVTable);
 
+const unsigned short MODIFIER_OPACITY    = 0;
+const unsigned short MODIFIER_SATURATION = 1;
+const unsigned short MODIFIER_BRIGHTNESS = 2;
+
 void
 ObsWindow::changePaintModifier (unsigned int modifier,
 				int          direction)
@@ -151,29 +155,30 @@ ObsWindow::glPaint (const GLWindowPaintAttrib& attrib,
 	 we wrap into glDrawWindow here */
 
 bool
-ObsWindow::glDraw (const GLMatrix&     transform,
-		   GLFragment::Attrib& attrib,
-		   const CompRegion&   region,
+ObsWindow::glDraw (const GLMatrix            &transform,
+		   const GLWindowPaintAttrib &attrib,
+		   const CompRegion          &region,
 		   unsigned int        mask)
 {
+    GLWindowPaintAttrib wAttrib (attrib);
     int factor;
 
     factor = customFactor[MODIFIER_OPACITY];
     if (factor != 100)
     {
-	attrib.setOpacity (factor * attrib.getOpacity () / 100);
+	wAttrib.opacity = factor * wAttrib.opacity / 100;
 	mask |= PAINT_WINDOW_TRANSLUCENT_MASK;
     }
 
     factor = customFactor[MODIFIER_BRIGHTNESS];
     if (factor != 100)
-	attrib.setBrightness (factor * attrib.getBrightness () / 100);
+	wAttrib.brightness = factor * wAttrib.brightness / 100;
 
     factor = customFactor[MODIFIER_SATURATION];
     if (factor != 100)
-	attrib.setSaturation (factor * attrib.getSaturation () / 100);
+	wAttrib.saturation = factor * wAttrib.saturation / 100;
 
-    return gWindow->glDraw (transform, attrib, region, mask);
+    return gWindow->glDraw (transform, wAttrib, region, mask);
 }
 
 void
@@ -278,19 +283,8 @@ ObsScreen::setOption (const CompString  &name,
     return true;
 }
 
-void
-ObsWindow::postLoad ()
-{
-    for (unsigned int i = 0; i < MODIFIER_COUNT; i++)
-    {
-	if (customFactor[i] != 100)
-	    modifierChanged (i);
-    }
-}
-
 ObsWindow::ObsWindow (CompWindow *w) :
     PluginClassHandler<ObsWindow, CompWindow> (w),
-    PluginStateWriter <ObsWindow> (this, w->id ()),
     window (w),
     cWindow (CompositeWindow::get (w)),
     gWindow (GLWindow::get (w)),
@@ -313,8 +307,6 @@ ObsWindow::ObsWindow (CompWindow *w) :
 
 ObsWindow::~ObsWindow ()
 {
-    writeSerializedData ();
-
     updateHandle.stop ();
 }
 

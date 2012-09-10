@@ -24,6 +24,9 @@
 
 COMPIZ_PLUGIN_20090315 (mousepoll, MousepollPluginVTable);
 
+const unsigned short MP_OPTION_MOUSE_POLL_INTERVAL = 0;
+const unsigned short MP_OPTION_NUM = 1;
+
 bool
 MousepollScreen::getMousePosition ()
 {
@@ -60,8 +63,8 @@ MousepollScreen::updatePosition ()
         for (it = pollers.begin (); it != pollers.end (); )
         {
             MousePoller *poller = *it;
- 
-            it++;
+
+            ++it;
             poller->mPoint = pos;
             poller->mCallback (pos);
         }
