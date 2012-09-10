@@ -52,7 +52,8 @@ static const char *IfaceTypeStr[] =
 typedef int AccessibilityEventHandler;
 
 /* Struct of a handler and list of handlers */
-struct AccessibilityHandler {
+struct AccessibilityHandler
+{
     const char *                event_type;
     AtspiEventListener *        event_listener;
     AccessibilityEventCallback  cb;
@@ -68,35 +69,35 @@ class AccessibilityScreen :
 {
     public:
 
-        AccessibilityScreen (CompScreen *);
-        ~AccessibilityScreen ();
+	AccessibilityScreen (CompScreen *);
+	~AccessibilityScreen ();
 
-        CompScreen *screen;
+	CompScreen *screen;
 
-        AccessibilityEventHandler
-        registerEventHandler (const char * event_type,
-                              AccessibilityEventCallback cb);
-        
-        void
-        unregisterEventHandler (AccessibilityEventHandler handler);
+	AccessibilityEventHandler
+	registerEventHandler (const char * event_type,
+			      AccessibilityEventCallback cb);
 
-        bool
-        unregisterByType (const char * event_type);
+	void
+	unregisterEventHandler (AccessibilityEventHandler handler);
 
-        void
-        unregisterAll ();
+	bool
+	unregisterByType (const char * event_type);
 
-        void
-        handleAccessibilityEvent (AccessibilityEvent *);
+	void
+	unregisterAll ();
+
+	void
+	handleAccessibilityEvent (AccessibilityEvent *);
 
     public:
         
-        AccessibilityHandlerList list;
-        int lastEventHandler;
+	AccessibilityHandlerList list;
+	int lastEventHandler;
 
     protected:
 
-        AtspiEventListener *listener;
+	AtspiEventListener *listener;
 
 };
 
@@ -108,6 +109,6 @@ class AccessibilityPluginVTable :
 {
     public:
 
-        bool init();
+	bool init();
         
 };
