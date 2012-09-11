@@ -57,24 +57,16 @@ class AccessibilityEntity
 	AccessibilityEntity (AtspiAccessible *);
 	virtual ~AccessibilityEntity ();
 
-	virtual bool
-	load (AtspiAccessible *);
+	virtual AccessibilityEntity *clone () const;
+	virtual IfaceType is ();
+	virtual bool load (AtspiAccessible *);
+	virtual bool contains (AccessibilityEntity *, int, int);
 
-	virtual bool
-	contains (AccessibilityEntity *, int, int);
-
-	virtual IfaceType
-	is ();
-
-	virtual AccessibilityEntity *
-	clone () const;
-
-	AtspiAccessible *
-	getObject ();
+	AtspiAccessible *getObject ();
 
     protected:
 
-	AtspiAccessible * obj;
+	AtspiAccessible *obj;
 };
 
 class AccessibilityComponent :
@@ -86,20 +78,12 @@ class AccessibilityComponent :
 
 	AccessibilityComponent (AtspiAccessible *);
 	
-	virtual AccessibilityComponent *
-	clone () const;
-	
-	CompRect
-	getExtents () const;
-	
-	CompPoint
-	getPosition () const;
-	
-	CompPoint
-	getSize () const;
-	
-	virtual IfaceType
-	is ();
+	virtual AccessibilityComponent *clone () const;
+	virtual IfaceType is ();
+
+	CompRect getExtents () const;
+	CompPoint getPosition () const;
+	CompPoint getSize () const;
 	
 	/* TODO: Implement based in a compiz layer type.
 	CompLayer
@@ -120,20 +104,12 @@ class AccessibilityText :
         
 	AccessibilityText (AtspiAccessible *);
 
-	virtual AccessibilityText *
-	clone () const;
+	virtual AccessibilityText *clone () const;
+	virtual IfaceType is ();
 
-	CompRect
-	getCharacterExtents (int) const;
-
-	CompRect
-	getRangeExtents (int) const;
-
-	int
-	getCaretOffset ();
-
-	virtual IfaceType
-	is ();
+	CompRect getCharacterExtents (int) const;
+	CompRect getRangeExtents (int) const;
+	int getCaretOffset ();
 
     protected:
 
@@ -149,28 +125,16 @@ class AccessibleObject
 
 	AccessibleObject (AtspiAccessible *);
         
-	AccessibleObject::Entities
-	create (AtspiAccessible *);
-
-	AccessibilityEntity::Ptr
-	get (IfaceType);
-
-	bool
-	is (IfaceType);
-
-	AccessibilityEntity::Ptr
-	getEntity (IfaceType);
+	AccessibleObject::Entities create (AtspiAccessible *);
+	AccessibilityEntity::Ptr get (IfaceType);
+	bool is (IfaceType);
+	AccessibilityEntity::Ptr getEntity (IfaceType);
 
     private:
 
-	AccessibilityEntity::Ptr
-	instantiate (AtspiAccessible *, IfaceType);
-
-	static IfaceType
-	enumFromStr (const char *);
-
-	int
-	getIfaceIndex (IfaceType);
+	AccessibilityEntity::Ptr instantiate (AtspiAccessible *, IfaceType);
+	static IfaceType enumFromStr (const char *);
+	int getIfaceIndex (IfaceType);
 
     private:
 
@@ -186,11 +150,8 @@ class AccessibilityEvent
 	AccessibilityEvent (const AtspiEvent *);
 	~AccessibilityEvent ();
 
-	const char *
-	getType ();
-
-	AccessibleObject *
-	getAccessibleObject ();
+	const char *getType ();
+	AccessibleObject *getAccessibleObject ();
 
     private:
 
@@ -207,20 +168,12 @@ class Accessibility
 	Accessibility ();
 	~Accessibility ();
 
-	bool
-	start ();
+	bool start ();
+	bool stop ();
+	bool active ();
 
-	bool
-	stop ();
-
-	bool
-	active ();
-
-	bool
-	registerEventHandler (const char *, AccessibilityEventCallback);
-
-	void
-	unregisterAll ();
+	bool registerEventHandler (const char *, AccessibilityEventCallback);
+	void unregisterAll ();
 
     friend class AccessibilityScreen;
 };      

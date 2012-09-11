@@ -72,26 +72,16 @@ class AccessibilityScreen :
 	AccessibilityScreen (CompScreen *);
 	~AccessibilityScreen ();
 
-	CompScreen *screen;
-
-	AccessibilityEventHandler
-	registerEventHandler (const char * event_type,
-			      AccessibilityEventCallback cb);
-
-	void
-	unregisterEventHandler (AccessibilityEventHandler handler);
-
-	bool
-	unregisterByType (const char * event_type);
-
-	void
-	unregisterAll ();
-
-	void
-	handleAccessibilityEvent (AccessibilityEvent *);
+	AccessibilityEventHandler registerEventHandler (const char * event_type,
+						        AccessibilityEventCallback cb);
+	void unregisterEventHandler (AccessibilityEventHandler handler);
+	bool unregisterByType (const char * event_type);
+	void unregisterAll ();
+	void handleAccessibilityEvent (AccessibilityEvent *);
 
     public:
         
+	CompScreen *screen;
 	AccessibilityHandlerList list;
 	int lastEventHandler;
 
