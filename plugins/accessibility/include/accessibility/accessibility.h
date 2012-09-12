@@ -28,9 +28,6 @@ extern "C" {
 }
 #endif
 
-/*
- * Class hierarchy that hold and manage differents accessible objects.
- */
 enum IfaceType
 {
     Accessible = 0,
@@ -116,6 +113,35 @@ class AccessibilityText :
 	AtspiText          *text;
 };
 
+class AccessibleObjectInterfaceTypes
+{
+    public:
+
+	AccessibleObjectInterfaceTypes ()
+	{
+	    mMap["Accessible"] = Accessible;
+	    mMap["Action"] = Action;
+	    mMap["Collection"] = Collection;
+	    mMap["Component"] = Component;
+	    mMap["Document"] = Document;
+	    mMap["EditableText"] = EditableText;
+	    mMap["Hypertext"] = Hypertext;
+	    mMap["Hyperlink"] = Hyperlink;
+	    mMap["Image"] = Image;
+	    mMap["Selection"] = Selection;
+	    mMap["Table"] = Table;
+	    mMap["Text"] = Text;
+	    mMap["Value"] = Value;
+	}
+
+	IfaceType get (const std::string &t) { return mMap[t]; }
+
+    private:
+
+	std::map <std::string, IfaceType> mMap;
+};
+
+
 class AccessibleObject
 {
     public:        
@@ -133,7 +159,6 @@ class AccessibleObject
     private:
 
 	AccessibilityEntity::Ptr instantiate (AtspiAccessible *, IfaceType);
-	static IfaceType enumFromStr (const char *);
 	int getIfaceIndex (IfaceType);
 
     private:
@@ -141,6 +166,8 @@ class AccessibleObject
 	Entities            ents;
 	Interfaces          interfaces;
 	AtspiAccessible *   obj;
+
+	static AccessibleObjectInterfaceTypes accessibleInterfaceTypes;
 };
 
 class AccessibilityEvent

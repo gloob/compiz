@@ -21,11 +21,13 @@
 
 COMPIZ_PLUGIN_20090315 (accessibility, AccessibilityPluginVTable);
 
+AccessibleObjectInterfaceTypes AccessibleObject::accessibleInterfaceTypes;
+
 AccessibleObject::AccessibleObject (AtspiAccessible *object)
 {
     compLogMessage ("Accessibility", CompLogLevelInfo,
                     "AccessibleObject::AccessibleObject (%s)\n", object->name);
-	
+
     obj = object;
     
     create (object);
@@ -43,7 +45,7 @@ AccessibleObject::create (AtspiAccessible *object)
 
         char *iface = (char *) g_array_index (ifaces, gchar *, i);
 
-        interfaces.push_back (enumFromStr (iface));
+        interfaces.push_back (accessibleInterfaceTypes.get (iface));
         // Defer the creation of the AccessibilityEntity structure.
         // TODO: Create a new method to create it from AccessibleObject.
         //ents.push_back (instantiate (object, iface));
@@ -88,17 +90,6 @@ AccessibleObject::instantiate (AtspiAccessible *object, IfaceType iface)
     }
 
     return entity;
-}
-
-IfaceType
-AccessibleObject::enumFromStr (const char *str)
-{
-
-    for (int i = 0; i < NUM_IFACES_SUPPORTED; i++)
-        if (!strcmp (IfaceTypeStr[i], str))
-            return (IfaceType) i;
-    
-    return Accessible;
 }
 
 AccessibilityEntity::Ptr

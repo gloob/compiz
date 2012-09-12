@@ -30,25 +30,6 @@
 #include <accessibility/accessibility.h>
 #include "accessibility_options.h"
 
-static const char *IfaceTypeStr[] =
-{
-    "Accessible",
-    "Action",
-    "Collection",
-    "Component",
-    "Document",
-    "EditableText",
-    "Hypertext",
-    "Hyperlink",
-    "Image",
-    "Selection",
-    "Table",
-    "Text",
-    "Value",
-};
-
-#define NUM_IFACES_SUPPORTED 13
-
 typedef int AccessibilityEventHandler;
 
 /* Struct of a handler and list of handlers */
