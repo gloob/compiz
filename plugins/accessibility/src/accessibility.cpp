@@ -323,39 +323,6 @@ AccessibilityText::is ()
     return Text;
 }
 
-
-Accessibility::Accessibility ()
-{
-    compLogMessage ("Accessibility", CompLogLevelInfo,
-                    "Accessibility constructor called.\n");
-
-}
-
-Accessibility::~Accessibility ()
-{
-    compLogMessage ("Accessibility", CompLogLevelInfo,
-                    "Accessibility destructor called.\n");
-
-}
-
-bool
-Accessibility::start ()
-{
-    return true;
-}
-
-bool
-Accessibility::stop ()
-{
-    return true;
-}
-
-bool
-Accessibility::active ()
-{
-    return true;
-}
-
 bool
 Accessibility::registerEventHandler (const char *event_type, AccessibilityEventCallback cb)
 {
@@ -420,7 +387,7 @@ staticAccessibilityEventDestroyCallback (void *data)
         compLogMessage ("Accessibility", CompLogLevelInfo,
                         "Delegating destroy to -> functor [%d][%s]\n",
                         (*it)->id);
-        // TODO: Implement callback mechanism for handles destroy.
+        // TODO: Implement callback mechanism for destruction handling.
     }
 }
 
@@ -551,65 +518,16 @@ AccessibilityScreen::unregisterAll ()
     }
 }
 
-void
-AccessibilityScreen::handleAccessibilityEvent (AccessibilityEvent *event)
-{
-
-    AccessibleObject *object = event->getAccessibleObject ();
-
-    if (object->is (Component))
-    {
-        
-        AccessibilityComponent::Ptr ac = 
-            boost::static_pointer_cast<AccessibilityComponent>
-            (object->getEntity (Component));
-
-        CompRect rect = ac->getExtents ();
-
-        compLogMessage ("Accessibility", CompLogLevelInfo, "Object is Component\n");
-        
-        compLogMessage ("Accessibility", CompLogLevelInfo,
-                        "Component Area [%d, %d] [%d, %d]\n",
-                        rect.x1(), rect.y1(), rect.x2(), rect.y2());
-    }
-    else
-    {
-
-        compLogMessage ("Accessibility", CompLogLevelInfo, "Object is NOT Component\n");
-    }
-}
-
 AccessibilityScreen::AccessibilityScreen (CompScreen *screen) :
     PluginClassHandler <AccessibilityScreen, CompScreen> (screen),
     screen (screen),
     lastEventHandler (0)
 {
-    compLogMessage ("Accessibility", CompLogLevelInfo,
-                    "AccessibilityScreen called.\n");
-
     /* TODO: Check atspi_init() code. There's a memory leak when registryd
      * isn't running.
      */
+    /*
     int atspi_status = atspi_init ();
-	
-    compLogMessage ("Accessibility", CompLogLevelInfo,
-                    "AccessibilityScreen: AT-SPI init() %d.\n", atspi_status);
-
-    /*
-    registerEventHandler ("object:state-changed:", boost::bind (
-                    &AccessibilityScreen::handleAccessibilityEvent, this, _1));
-    */
-
-    compLogMessage ("Accessibility", CompLogLevelInfo, "Running!\n");
-        
-    /*
-    // Launch main event atspi loop
-    // This is not needed because compiz private screen launches its own
-    // Glib MainLoop
-    */
-    /*
-
-    atspi_event_main();
     */
 }
 
@@ -617,12 +535,6 @@ AccessibilityScreen::~AccessibilityScreen ()
 {
 
     unregisterAll ();
-    
-    //atspi_event_quit();
-    int atspi_status = atspi_exit ();
-
-    compLogMessage ("Accessibility", CompLogLevelInfo,
-                    "~AccessibilityScreen called. Exit value: %d\n", atspi_status);
 }
 
 bool

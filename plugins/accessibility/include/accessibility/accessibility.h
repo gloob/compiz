@@ -192,12 +192,7 @@ class Accessibility
 {
     public:
 
-	Accessibility ();
-	~Accessibility ();
-
-	bool start ();
-	bool stop ();
-	bool active ();
+	Accessibility () {}
 
 	bool registerEventHandler (const char *, AccessibilityEventCallback);
 	void unregisterAll ();
