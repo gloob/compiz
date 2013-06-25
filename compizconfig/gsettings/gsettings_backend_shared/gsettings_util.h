@@ -2,15 +2,13 @@
 #define _COMPIZ_GSETTINGS_UTIL_H
 
 #include <ccs.h>
-#include <ccs-backend.h>
+#include <ccs_gsettings_backend_fwd.h>
 
 COMPIZCONFIG_BEGIN_DECLS
 
 #include <glib.h>
 #include <glib-object.h>
 #include <gio/gio.h>
-
-#include "ccs_gsettings_interface.h"
 
 /* some forward declarations */
 void
@@ -30,11 +28,8 @@ void
 ccsGSettingsSetIntegration (CCSBackend *backend, CCSIntegration *integration);
 
 typedef struct _CCSGSettingsBackendPrivate CCSGSettingsBackendPrivate;
-typedef struct _CCSGSettingsBackendInterface CCSGSettingsBackendInterface;
 
 extern const CCSBackendInfo gsettingsBackendInfo;
-
-typedef struct _CCSGSettingsWrapper CCSGSettingsWrapper;
 
 gchar *
 getSchemaNameForPlugin (const char *plugin);
@@ -159,7 +154,7 @@ Bool writeButtonToVariant (CCSSettingButtonValue button, GVariant **variant);
 
 Bool writeEdgeToVariant (unsigned int edges, GVariant **variant);
 
-void writeVariantToKey (CCSGSettingsWrapper *settings,
+Bool writeVariantToKey (CCSGSettingsWrapper *settings,
 			const char *key,
 			GVariant   *value);
 

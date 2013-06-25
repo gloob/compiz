@@ -993,7 +993,6 @@ GroupSelection::finishTabbing ()
 	w->move (gw->mDestination.x () - WIN_X (w),
 		 gw->mDestination.y () - WIN_Y (w), true);
 	gs->mQueued = false;
-	w->syncPosition ();
 
 	if (mUngroupState == UngroupSingle &&
 	    (gw->mAnimateState & IS_UNGROUPING))
@@ -1586,7 +1585,7 @@ GroupSelection::tabGroup (CompWindow *main)
     /* Slot is initialized after GroupTabBar is created */
     gs->changeTab (gw->mSlot, GroupTabBar::RotateUncertain);
 
-    /* Set up tab bar dimentions */
+    /* Set up tab bar dimensions */
     mTabBar->recalcTabBarPos (WIN_CENTER_X (main),
 			  WIN_X (main), WIN_X (main) + WIN_WIDTH (main));
 
@@ -1935,7 +1934,6 @@ GroupScreen::changeTab (GroupTabBarSlot             *topTab,
 
 	    mQueued = true;
 	    w->move (dx, dy, false);
-	    w->syncPosition ();
 	    mQueued = false;
 	}
 

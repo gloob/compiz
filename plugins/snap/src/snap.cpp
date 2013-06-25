@@ -52,8 +52,6 @@ SnapWindow::move (int dx, int dy, bool sync)
     window->move (dx, dy, true);
     /* warp the pointer in the case of
      * snap release */
-    if (sync)
-	window->syncPosition ();
     skipNotify = false;
 }
 
@@ -864,9 +862,8 @@ SnapWindow::~SnapWindow ()
 bool
 SnapPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
 
-    return true;
+    return false;
 }
-

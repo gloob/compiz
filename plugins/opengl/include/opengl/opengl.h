@@ -50,7 +50,7 @@
 #include <opengl/programcache.h>
 #include <opengl/shadercache.h>
 
-#define COMPIZ_OPENGL_ABI 5
+#define COMPIZ_OPENGL_ABI 6
 
 /*
  * Some plugins check for #ifdef USE_MODERN_COMPIZ_GL. Support it for now, but
@@ -449,6 +449,8 @@ namespace GL {
     /* OpenGL|ES does not support different draw/read framebuffers */
     static const GLenum 		    DRAW_FRAMEBUFFER = GL_FRAMEBUFFER;
     static const GLenum 		    READ_FRAMEBUFFER = GL_FRAMEBUFFER;
+    static const GLenum	                    DRAW_FRAMEBUFFER_BINDING = FRAMEBUFFER_BINDING;
+    static const GLenum	                    READ_FRAMEBUFFER_BINDING = FRAMEBUFFER_BINDING;
 
     static const GLenum 		    FRAMEBUFFER_COMPLETE = GL_FRAMEBUFFER_COMPLETE;
     static const GLenum 		    FRAMEBUFFER_UNDEFINED = 0;
@@ -484,6 +486,8 @@ namespace GL {
 
     static const GLenum 		  DRAW_FRAMEBUFFER = GL_DRAW_FRAMEBUFFER_EXT;
     static const GLenum 		  READ_FRAMEBUFFER = GL_READ_FRAMEBUFFER_EXT;
+    static const GLenum	                  DRAW_FRAMEBUFFER_BINDING = GL_DRAW_FRAMEBUFFER_BINDING_EXT;
+    static const GLenum	                  READ_FRAMEBUFFER_BINDING = GL_READ_FRAMEBUFFER_BINDING_EXT;
     static const GLenum 		  FRAMEBUFFER_COMPLETE = GL_FRAMEBUFFER_COMPLETE_EXT;
     static const GLenum 		  FRAMEBUFFER_UNDEFINED = GL_FRAMEBUFFER_UNDEFINED;
     static const GLenum 		  FRAMEBUFFER_INCOMPLETE_ATTACHMENT = GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT;
@@ -580,6 +584,8 @@ extern GLScreenPaintAttrib defaultScreenPaintAttrib;
 
 class GLScreen;
 class GLFramebufferObject;
+class GLScreenInterface;
+extern template class WrapableInterface<GLScreen, GLScreenInterface>;
 
 class GLScreenInterface :
     public WrapableInterface<GLScreen, GLScreenInterface>
@@ -669,6 +675,7 @@ class GLScreenInterface :
 
 };
 
+extern template class PluginClassHandler<GLScreen, CompScreen, COMPIZ_OPENGL_ABI>;
 
 class GLScreen :
     public WrapableHandler<GLScreenInterface, 8>,
@@ -807,6 +814,8 @@ struct GLWindowPaintAttrib {
 };
 
 class GLWindow;
+class GLWindowInterface;
+extern template class WrapableInterface<GLWindow, GLWindowInterface>;
 
 class GLWindowInterface :
     public WrapableInterface<GLWindow, GLWindowInterface>
@@ -870,6 +879,8 @@ class GLWindowInterface :
 	virtual void glDrawTexture (GLTexture *texture, const GLMatrix &,
 	                            const GLWindowPaintAttrib &, unsigned int);
 };
+
+extern template class PluginClassHandler<GLWindow, CompWindow, COMPIZ_OPENGL_ABI>;
 
 class GLWindow :
     public WrapableHandler<GLWindowInterface, 4>,

@@ -202,10 +202,13 @@ AddWindow::AddWindow (CompWindow *window) :
 
     GLWindowInterface::setHandler (gWindow, false);
 
-    if (as->isToggle &&
-	window->id () != screen->activeWindow () &&
+    if (as->isToggle)
+    {
+	if (window->id () != screen->activeWindow () &&
 	!window->overrideRedirect ())
-	dim = true;
+	    dim = true;
+	gWindow->glPaintSetEnabled (this, true);
+    }
 }
 
 AddWindow::~AddWindow ()
@@ -240,10 +243,10 @@ AddScreen::AddScreen (CompScreen *screen) :
 bool
 AddPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-	!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-	!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }

@@ -55,7 +55,7 @@ WinrulesWindow::is ()
 }
 
 bool
-WinrulesWindow::isFocussable ()
+WinrulesWindow::isFocussable () const
 {
     window->isFocussable ();
 
@@ -71,7 +71,7 @@ WinrulesWindow::focus ()
 }
 
 bool
-WinrulesWindow::alpha ()
+WinrulesWindow::alpha () const
 {
     window->alpha ();
 
@@ -546,9 +546,8 @@ WinrulesWindow::WinrulesWindow (CompWindow *window) :
 bool
 WinrulesPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
 
-    return true;
+    return false;
 }
-

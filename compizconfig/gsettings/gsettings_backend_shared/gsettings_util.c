@@ -114,7 +114,7 @@ translateToLowercaseForGSettings (char *name)
     unsigned int i;
 
     /* Everything must be lowercase */
-    for (i = 0; i < strlen (name); i++)
+    for (i = 0; i < strlen (name); ++i)
 	name[i] = g_ascii_tolower (name[i]);
 }
 
@@ -165,7 +165,7 @@ compizconfigTypeHasVariantType (CCSSettingType type)
 	TypeFloat
     };
 
-    for (; i < nVariantTypes; i++)
+    for (; i < nVariantTypes; ++i)
     {
 	if (variantTypes[i] == type)
 	    return TRUE;
@@ -265,7 +265,7 @@ updateSettingWithGSettingsKeyName (CCSBackend *backend,
 	 ret = FALSE;
     }
 
-    g_free (pathOrig);
+    free (pathOrig);
 
     if (uncleanKeyName)
 	g_free (uncleanKeyName);
@@ -294,7 +294,7 @@ appendToPluginsWithSetKeysList (const gchar *plugin,
     }
 
     if (!found)
-	(*newWrittenPluginsSize)++;
+	++(*newWrittenPluginsSize);
 
     *newWrittenPlugins = g_variant_dup_strv (writtenPlugins, &writtenPluginsLen);
 
@@ -343,7 +343,7 @@ filterAllSettingsMatchingPartOfStringIgnoringDashesUnderscoresAndCase (const gch
     {
 	CCSSetting *s = (CCSSetting *) iter->data;
 
-	char *name = ccsSettingGetName (s);
+	const char *name = ccsSettingGetName (s);
 	char *underscores_as_dashes = translateUnderscoresToDashesForGSettings (name);
 
 	if (g_ascii_strncasecmp (underscores_as_dashes, keyName, strlen (keyName)) == 0)
@@ -591,7 +591,7 @@ readColorListValue (GVariantIter *iter, guint nItems, CCSSetting *setting, CCSOb
     {
 	ccsStringToColor (colorValue,
 			  &array[i]);
-	i++;
+	++i;
     }
 
     list = ccsGetValueListFromColorArray (array, nItems, setting);
@@ -930,12 +930,22 @@ Bool writeEdgeToVariant (unsigned int edges, GVariant **variant)
     return TRUE;
 }
 
-void
+Bool
 writeVariantToKey (CCSGSettingsWrapper  *settings,
 		   const char *key,
 		   GVariant   *value)
 {
-    ccsGSettingsWrapperSetValue (settings, key, value);
+    if (settings)
+    {
+	ccsGSettingsWrapperSetValue (settings, key, value);
+	return TRUE;
+
+    }
+    else
+    {
+	ccsWarning ("attempted to write without a schema");
+	return FALSE;
+    }
 }
 
 typedef void (*VariantItemCheckAndInsertFunc) (GVariantBuilder *, const char *item, void *userData);

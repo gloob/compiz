@@ -233,7 +233,6 @@ copyGconfValues (GConfEngine *conf,
     while (tmp)
     {
 	GConfEntry *entry = tmp->data;
-	GConfValue *value;
 	const char *key = gconf_entry_get_key (entry);
 	char       *name, *newKey, *newSchema = NULL;
 
@@ -243,6 +242,8 @@ copyGconfValues (GConfEngine *conf,
 
 	if (to)
 	{
+	    GConfValue *value;
+
 	    if (asprintf (&newKey, "%s/%s", to, name + 1) == -1)
 		newKey = NULL;
 
@@ -409,7 +410,7 @@ readListValue (CCSSetting *setting,
 	    if (!array)
 		break;
 
-	    for (; valueList; valueList = valueList->next, i++)
+	    for (; valueList; valueList = valueList->next, ++i)
 		array[i] =
 		    gconf_value_get_bool (valueList->data) ? TRUE : FALSE;
 	    list = ccsGetValueListFromBoolArray (array, nItems, setting);
@@ -422,7 +423,7 @@ readListValue (CCSSetting *setting,
 	    if (!array)
 		break;
 
-	    for (; valueList; valueList = valueList->next, i++)
+	    for (; valueList; valueList = valueList->next, ++i)
 		array[i] = gconf_value_get_int (valueList->data);
 	    list = ccsGetValueListFromIntArray (array, nItems, setting);
 	    free (array);
@@ -434,7 +435,7 @@ readListValue (CCSSetting *setting,
 	    if (!array)
 		break;
 
-	    for (; valueList; valueList = valueList->next, i++)
+	    for (; valueList; valueList = valueList->next, ++i)
 		array[i] = gconf_value_get_float (valueList->data);
 	    list = ccsGetValueListFromFloatArray (array, nItems, setting);
 	    free (array);
@@ -447,7 +448,7 @@ readListValue (CCSSetting *setting,
 	    if (!array)
 		break;
 
-	    for (; valueList; valueList = valueList->next, i++)
+	    for (; valueList; valueList = valueList->next, ++i)
 		array[i] = strdup (gconf_value_get_string (valueList->data));
 
 	    array[nItems] = NULL;
@@ -463,7 +464,7 @@ readListValue (CCSSetting *setting,
 	    if (!array)
 		break;
 
-	    for (; valueList; valueList = valueList->next, i++)
+	    for (; valueList; valueList = valueList->next, ++i)
     	    {
 		memset (&array[i], 0, sizeof (CCSSettingColorValue));
 		ccsStringToColor (gconf_value_get_string (valueList->data),
@@ -822,14 +823,14 @@ writeOption (CCSSetting * setting)
     {
     case TypeString:
 	{
-	    char *value;
+	    const char *value;
 	    if (ccsGetString (setting, &value))
 		gconf_client_set_string (client, pathName, value, NULL);
 	}
 	break;
     case TypeMatch:
 	{
-	    char *value;
+	    const char *value;
 	    if (ccsGetMatch (setting, &value))
 		gconf_client_set_string (client, pathName, value, NULL);
 	}

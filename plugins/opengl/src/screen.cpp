@@ -32,10 +32,39 @@
 #endif
 #include <errno.h>
 
+#include <boost/bind.hpp>
+#include <boost/make_shared.hpp>
+
 #include "privates.h"
+#include "blacklist/blacklist.h"
 
 #include <dlfcn.h>
 #include <math.h>
+
+template class WrapableInterface<GLScreen, GLScreenInterface>;
+
+#ifndef USE_GLES
+/*
+ * Historically most versions of fglrx have contained a nasty hack that checks
+ * if argv[0] == "compiz", and downgrades OpenGL features including dropping
+ * GLSL support (hides GL_ARB_shading_language_100). (LP #1026920)
+ * This hack in fglrx is misguided and I'm told AMD have or will remove
+ * it soon. In the mean time, modify argv[0] so it's not triggered...
+ */
+class DetectionWorkaround
+{
+    public:
+        DetectionWorkaround ()
+        {
+            program_invocation_short_name[0] = 'C';
+        }
+        ~DetectionWorkaround ()
+        {
+            program_invocation_short_name[0] = 'c';
+        }
+};
+#endif
+
 
 using namespace compiz::opengl;
 
@@ -162,7 +191,6 @@ namespace GL {
     bool canDoSlightlySaturated = false;
 
     unsigned int vsyncCount = 0;
-    unsigned int unthrottledFrames = 0;
 
     bool stencilBuffer = false;
 #ifndef USE_GLES
@@ -271,9 +299,72 @@ public:
     GLScreen *gScreen;
 };
 
+#ifndef USE_GLES
+
+namespace compiz
+{
+namespace opengl
+{
+void swapIntervalGLX (Display *d, int interval)
+{
+    // Docs: http://www.opengl.org/registry/specs/SGI/swap_control.txt
+    if (GL::swapInterval)
+	GL::swapInterval (interval);
+}
+
+int waitVSyncGLX (int          wait,
+		  int          remainder,
+		  unsigned int *count)
+{
+    /*
+     * While glXSwapBuffers/glXCopySubBufferMESA are meant to do a
+     * flush before they blit, it is best to not let that happen.
+     * Because that flush would occur after GL::waitVideoSync, causing
+     * a delay and the final blit to be slightly out of sync resulting
+     * in tearing. So we need to do a glFinish before we wait for
+     * vsync, to absolutely minimize tearing.
+     */
+    glFinish ();
+
+    // Docs: http://www.opengl.org/registry/specs/SGI/video_sync.txt
+    if (GL::waitVideoSync)
+	return GL::waitVideoSync (wait, remainder, count);
+
+    return 0;
+}
+}
+}
+
+#else
+
+namespace compiz
+{
+namespace opengl
+{
+void swapIntervalEGL (Display *display, int interval)
+{
+    eglSwapInterval (eglGetDisplay (display), interval);
+}
+
+int waitVSyncEGL (int wait,
+		  int remainder,
+		  unsigned int *count)
+{
+    /* not supported */
+    return 0;
+}
+}
+}
+
+#endif
+
 bool
 GLScreen::glInitContext (XVisualInfo *visinfo)
 {
+#ifndef USE_GLES
+    DetectionWorkaround workaround;
+#endif
+
     #ifdef USE_GLES
     Display             *xdpy;
     Window               overlay;
@@ -325,15 +416,32 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
 	return false;
     }
 
+    EGLint val;
+    int msaaBuffers = MAXSHORT;
+    int msaaSamples = MAXSHORT;
     visualid = XVisualIDFromVisual (attr.visual);
     config = configs[0];
-    for (int i = 0; i < count; i++) {
-        EGLint val;
-        eglGetConfigAttrib (dpy, configs[i], EGL_NATIVE_VISUAL_ID, &val);
-        if (visualid == val) {
-            config = configs[i];
-            break;
-        }
+
+    for (int i = 0; i < count; ++i)
+    {
+	eglGetConfigAttrib (dpy, configs[i], EGL_SAMPLE_BUFFERS, &val);
+	if (val > msaaBuffers)
+	   continue;
+
+	msaaBuffers = val;
+
+	eglGetConfigAttrib (dpy, configs[i], EGL_SAMPLES, &val);
+	if (val > msaaSamples)
+	    continue;
+
+	msaaSamples = val;
+
+	eglGetConfigAttrib (dpy, configs[i], EGL_NATIVE_VISUAL_ID, &val);
+	if (val != visualid)
+	    continue;
+
+	config = configs[i];
+	break;
     }
 
     overlay = CompositeScreen::get (screen)->overlay ();
@@ -453,7 +561,7 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
     GL::getProgramiv = glGetProgramiv;
     GL::getProgramInfoLog = glGetProgramInfoLog;
     GL::createShader = glCreateShader;
-    GL::shaderSource = glShaderSource;
+    GL::shaderSource = (GL::GLShaderSourceProc) glShaderSource;
     GL::compileShader = glCompileShader;
     GL::createProgram = glCreateProgram;
     GL::attachShader = glAttachShader;
@@ -500,6 +608,8 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
     if (GL::textureFromPixmap)
 	registerBindPixmap (EglTexture::bindPixmapToTexture);
 
+    priv->incorrectRefreshRate = false;
+
     #else
 
     Display		 *dpy = screen->dpy ();
@@ -508,7 +618,6 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
     GLfloat		 ambientLight[]   = { 0.0f, 0.0f,  0.0f, 0.0f };
     GLfloat		 diffuseLight[]   = { 0.9f, 0.9f,  0.9f, 0.9f };
     GLfloat		 light0Position[] = { -0.5f, 0.5f, -9.0f, 1.0f };
-    const char           *glRenderer;
     CompOption::Vector o (0);
 
     priv->ctx = glXCreateContext (dpy, visinfo, NULL, True);
@@ -547,7 +656,14 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
 	return false;
     }
 
-    glRenderer = (const char *) glGetString (GL_RENDERER);
+    const char *glVendor = (const char *) glGetString (GL_VENDOR);
+    const char *glRenderer = (const char *) glGetString (GL_RENDERER);
+    const char *glVersion = (const char *) glGetString (GL_VERSION);
+
+    priv->glVendor = glVendor;
+    priv->glRenderer = glRenderer;
+    priv->glVersion = glVersion;
+
     if (glRenderer != NULL &&
 	(strcmp (glRenderer, "Software Rasterizer") == 0 ||
 	 strcmp (glRenderer, "Mesa X11") == 0))
@@ -560,6 +676,7 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
     }
 
     priv->commonFrontbuffer = true;
+    priv->incorrectRefreshRate = false;
     if (glRenderer != NULL && strstr (glRenderer, "on llvmpipe"))
     {
 	/*
@@ -570,6 +687,14 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
 	 * copying in those cases.
 	 */
 	priv->commonFrontbuffer = false;
+    }
+
+    if (glVendor != NULL && strstr (glVendor, "NVIDIA"))
+    {
+	/*
+	 * NVIDIA provides an incorrect refresh rate, we need to
+	 * force 60Hz */
+	priv->incorrectRefreshRate = true;
     }
 
     if (strstr (glExtensions, "GL_ARB_texture_non_power_of_two"))
@@ -697,15 +822,6 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
 
     priv->updateRenderMode ();
 
-    /*
-     * !!! WARNING for users of the ATI/AMD fglrx driver !!!
-     *
-     * fglrx contains a hack which hides GL_ARB_shading_language_100 if
-     * your argv[0]=="compiz" for stupid historical reasons, so you won't
-     * get shader support by default when using fglrx.
-     *
-     * Workaround: Rename or link your "compiz" binary to "Compiz".
-     */
     if (strstr (glExtensions, "GL_ARB_fragment_shader") &&
         strstr (glExtensions, "GL_ARB_vertex_shader") &&
 	strstr (glExtensions, "GL_ARB_shader_objects") &&
@@ -810,10 +926,16 @@ GLScreen::glInitContext (XVisualInfo *visinfo)
 }
 
 
+template class PluginClassHandler<GLScreen, CompScreen, COMPIZ_OPENGL_ABI>;
+
 GLScreen::GLScreen (CompScreen *s) :
     PluginClassHandler<GLScreen, CompScreen, COMPIZ_OPENGL_ABI> (s),
     priv (new PrivateGLScreen (this))
 {
+#ifndef USE_GLES
+    DetectionWorkaround workaround;
+#endif
+
     XVisualInfo		 *visinfo = NULL;
 #ifndef USE_GLES
     Display		 *dpy = s->dpy ();
@@ -868,6 +990,16 @@ GLScreen::GLScreen (CompScreen *s) :
     }
 
     glxExtensions = glXQueryExtensionsString (dpy, s->screenNum ());
+
+    if (glxExtensions == NULL)
+    {
+	compLogMessage ("opengl", CompLogLevelFatal,
+	                "glXQueryExtensionsString is NULL for screen %d",
+	                s->screenNum ());
+	screen->handleCompizEvent ("opengl", "fatal_fallback", o);
+	setFailed ();
+	return;
+    }
 
     if (!strstr (glxExtensions, "GLX_SGIX_fbconfig"))
     {
@@ -943,7 +1075,7 @@ GLScreen::GLScreen (CompScreen *s) :
 
     for (i = 0; i <= MAX_DEPTH; i++)
     {
-	int j, db, stencil, depth, alpha, mipmap, rgba;
+	int j, db, stencil, depth, alpha, mipmap, msaaBuffers, msaaSamples, rgba;
 
 	priv->glxPixmapFBConfigs[i].fbConfig       = NULL;
 	priv->glxPixmapFBConfigs[i].mipmap         = 0;
@@ -951,11 +1083,13 @@ GLScreen::GLScreen (CompScreen *s) :
 	priv->glxPixmapFBConfigs[i].textureFormat  = 0;
 	priv->glxPixmapFBConfigs[i].textureTargets = 0;
 
-	db      = MAXSHORT;
-	stencil = MAXSHORT;
-	depth   = MAXSHORT;
-	mipmap  = 0;
-	rgba    = 0;
+	db          = MAXSHORT;
+	stencil     = MAXSHORT;
+	depth       = MAXSHORT;
+	msaaBuffers = MAXSHORT;
+	msaaSamples = MAXSHORT;
+	mipmap      = 0;
+	rgba        = 0;
 
 	for (j = 0; j < nElements; j++)
 	{
@@ -1031,7 +1165,21 @@ GLScreen::GLScreen (CompScreen *s) :
 	    depth = value;
 
 	    (*GL::getFBConfigAttrib) (dpy, fbConfigs[j],
-	                              GLX_BIND_TO_MIPMAP_TEXTURE_EXT, &value);
+				      GLX_SAMPLE_BUFFERS, &value);
+	    if (value > msaaBuffers)
+	        continue;
+
+	    msaaBuffers = value;
+
+	    (*GL::getFBConfigAttrib) (dpy, fbConfigs[j],
+				      GLX_SAMPLES, &value);
+	    if (value > msaaSamples)
+	        continue;
+
+	    msaaSamples = value;
+
+	    (*GL::getFBConfigAttrib) (dpy, fbConfigs[j],
+				      GLX_BIND_TO_MIPMAP_TEXTURE_EXT, &value);
 	    if (value < mipmap)
 		continue;
 
@@ -1083,13 +1231,15 @@ GLScreen::~GLScreen ()
     EGLDisplay dpy = eglGetDisplay (xdpy);
 
     eglMakeCurrent (dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-    eglDestroyContext (dpy, priv->ctx);
+    if (priv->ctx != EGL_NO_CONTEXT)
+	eglDestroyContext (dpy, priv->ctx);
     eglDestroySurface (dpy, priv->surface);
     eglTerminate (dpy);
     eglReleaseThread ();
     #else
 
-    glXDestroyContext (screen->dpy (), priv->ctx);
+    if (priv->ctx)
+	glXDestroyContext (screen->dpy (), priv->ctx);
     #endif
 
     if (priv->scratchFbo)
@@ -1109,28 +1259,38 @@ PrivateGLScreen::PrivateGLScreen (GLScreen   *gs) :
     clearBuffers (true),
     lighting (false),
     #ifndef USE_GLES
+    ctx (NULL),
     getProcAddress (0),
     doubleBuffer (screen->dpy (), *screen, cScreen->output ()),
     #else
+    ctx (EGL_NO_CONTEXT),
     doubleBuffer (screen->dpy (), *screen, surface),
     #endif
     scratchFbo (NULL),
     outputRegion (),
+    refreshSubBuffer (false),
     lastMask (0),
     bindPixmap (),
     hasCompositing (false),
     commonFrontbuffer (true),
+    incorrectRefreshRate (false),
     programCache (new GLProgramCache (30)),
     shaderCache (),
     autoProgram (new GLScreenAutoProgram(gs)),
     rootPixmapCopy (None),
-    rootPixmapSize ()
+    rootPixmapSize (),
+    glVendor (NULL),
+    glRenderer (NULL),
+    glVersion (NULL),
+    prevRegex (),
+    prevBlacklisted (false)
 {
     ScreenInterface::setHandler (screen);
 }
 
 PrivateGLScreen::~PrivateGLScreen ()
 {
+    delete projection;
     delete programCache;
     delete autoProgram;
     if (rootPixmapCopy)
@@ -1660,61 +1820,11 @@ GLScreen::getShaderData (GLShaderParameters &params)
     return &priv->shaderCache.getShaderData(params);
 }
 
-namespace GL
-{
-
-void
-waitForVideoSync ()
-{
-#ifndef USE_GLES
-    GL::unthrottledFrames++;
-    if (GL::waitVideoSync)
-    {
-	// Don't wait twice. Just in case.
-	if (GL::swapInterval)
-	    (*GL::swapInterval) (0);
-
-	/*
-	 * While glXSwapBuffers/glXCopySubBufferMESA are meant to do a
-	 * flush before they blit, it is best to not let that happen.
-	 * Because that flush would occur after GL::waitVideoSync, causing
-	 * a delay and the final blit to be slightly out of sync resulting
-	 * in tearing. So we need to do a glFinish before we wait for
-	 * vsync, to absolutely minimize tearing.
-	 */
-	glFinish ();
-
-	// Docs: http://www.opengl.org/registry/specs/SGI/video_sync.txt
-	unsigned int oldCount = GL::vsyncCount;
-	(*GL::waitVideoSync) (1, 0, &GL::vsyncCount);
-
-	if (GL::vsyncCount != oldCount)
-	    GL::unthrottledFrames = 0;
-    }
-#endif
-}
-
-void
-controlSwapVideoSync (bool sync)
-{
-#ifndef USE_GLES
-    // Docs: http://www.opengl.org/registry/specs/SGI/swap_control.txt
-    if (GL::swapInterval)
-    {
-	(*GL::swapInterval) (sync ? 1 : 0);
-	GL::unthrottledFrames++;
-    }
-    else if (sync)
-	waitForVideoSync ();
-#else
-    eglSwapInterval (eglGetDisplay (screen->dpy ()), sync ? 1 : 0);
-    GL::unthrottledFrames++;
-#endif
-}
-
-} // namespace GL
-
-GLDoubleBuffer::GLDoubleBuffer (Display *d, const CompSize &s) :
+GLDoubleBuffer::GLDoubleBuffer (Display                                             *d,
+				const CompSize                                      &s,
+				const compiz::opengl::impl::GLXSwapIntervalEXTFunc  &swapIntervalFunc,
+				const compiz::opengl::impl::GLXWaitVideoSyncSGIFunc &waitVideoSyncFunc) :
+    compiz::opengl::DoubleBuffer (swapIntervalFunc, waitVideoSyncFunc),
     mDpy (d),
     mSize (s)
 {
@@ -1722,8 +1832,8 @@ GLDoubleBuffer::GLDoubleBuffer (Display *d, const CompSize &s) :
 
 #ifndef USE_GLES
 
-static void
-copyFrontToBack()
+void
+GLXDoubleBuffer::copyFrontToBack() const
 {
     int w = screen->width ();
     int h = screen->height ();
@@ -1747,10 +1857,12 @@ copyFrontToBack()
     glMatrixMode (GL_MODELVIEW);
 }
 
-GLXDoubleBuffer::GLXDoubleBuffer (Display *d,
-			      const CompSize &s,
-			      Window output) :
-    GLDoubleBuffer (d, s),
+GLXDoubleBuffer::GLXDoubleBuffer (Display        *d,
+				  const CompSize &s,
+				  Window         output) :
+    GLDoubleBuffer (d, s,
+		    boost::bind (compiz::opengl::swapIntervalGLX, d, _1),
+		    boost::bind (compiz::opengl::waitVSyncGLX, _1, _2, _3)),
     mOutput (output)
 {
 }
@@ -1758,12 +1870,7 @@ GLXDoubleBuffer::GLXDoubleBuffer (Display *d,
 void
 GLXDoubleBuffer::swap () const
 {
-    GL::controlSwapVideoSync (setting[VSYNC]);
-
     glXSwapBuffers (mDpy, mOutput);
-
-    if (!setting[PERSISTENT_BACK_BUFFER])
-	copyFrontToBack ();
 }
 
 bool
@@ -1776,9 +1883,6 @@ void
 GLXDoubleBuffer::blit (const CompRegion &region) const
 {
     const CompRect::vector &blitRects (region.rects ());
-
-    if (setting[VSYNC])
-        GL::waitForVideoSync ();
 
     foreach (const CompRect &r, blitRects)
     {
@@ -1800,9 +1904,6 @@ GLXDoubleBuffer::fallbackBlit (const CompRegion &region) const
     const CompRect::vector &blitRects (region.rects ());
     int w = screen->width ();
     int h = screen->height ();
-
-    if (setting[VSYNC])
-	GL::waitForVideoSync ();
 
     glMatrixMode (GL_PROJECTION);
     glPushMatrix ();
@@ -1833,10 +1934,12 @@ GLXDoubleBuffer::fallbackBlit (const CompRegion &region) const
 
 #else
 
-EGLDoubleBuffer::EGLDoubleBuffer (Display *d,
-			      const CompSize &s,
-			      EGLSurface const & surface) :
-    GLDoubleBuffer (d, s),
+EGLDoubleBuffer::EGLDoubleBuffer (Display          *d,
+				  const CompSize   &s,
+				  EGLSurface const &surface) :
+    GLDoubleBuffer (d, s,
+		    boost::bind (compiz::opengl::swapIntervalEGL, d, _1),
+		    boost::bind (compiz::opengl::waitVSyncEGL, _1, _2, _3)),
     mSurface (surface)
 {
 }
@@ -1844,11 +1947,7 @@ EGLDoubleBuffer::EGLDoubleBuffer (Display *d,
 void
 EGLDoubleBuffer::swap () const
 {
-    GL::controlSwapVideoSync (setting[VSYNC]);
-
     eglSwapBuffers (eglGetDisplay (mDpy), mSurface);
-    eglWaitGL ();
-    XFlush (mDpy);
 }
 
 bool
@@ -1863,8 +1962,6 @@ EGLDoubleBuffer::blit (const CompRegion &region) const
     CompRect::vector blitRects (region.rects ());
     int		     y = 0;
 
-    GL::controlSwapVideoSync (setting[VSYNC]);
-
     foreach (const CompRect &r, blitRects)
     {
 	y = mSize.height () - r.y2 ();
@@ -1875,9 +1972,6 @@ EGLDoubleBuffer::blit (const CompRegion &region) const
 			      r.width (),
 			      r.height ());
     }
-
-    eglWaitGL ();
-    XFlush (screen->dpy ());
 }
 
 bool
@@ -1888,6 +1982,11 @@ EGLDoubleBuffer::fallbackBlitAvailable () const
 
 void
 EGLDoubleBuffer::fallbackBlit (const CompRegion &region) const
+{
+}
+
+void
+EGLDoubleBuffer::copyFrontToBack() const
 {
 }
 
@@ -2023,13 +2122,26 @@ PrivateGLScreen::paintOutputs (CompOutput::ptrList &outputs,
 	gScreen->glPaintCompositedOutput (screen->region (), scratchFbo, mask);
     }
 
+    if (cScreen->outputWindowChanged ())
+    {
+	/*
+	 * Changes to the composite output window seem to take a whole frame
+	 * to take effect. So to avoid a visible flicker, we skip this frame
+	 * and do a full redraw next time.
+	 */
+	cScreen->damageScreen ();
+	return;
+    }
+
+    bool alwaysSwap = optionGetAlwaysSwapBuffers ();
     bool fullscreen = useFbo ||
-                      optionGetAlwaysSwapBuffers () ||
+                      alwaysSwap ||
                       ((mask & COMPOSITE_SCREEN_DAMAGE_ALL_MASK) &&
                        commonFrontbuffer);
 
     doubleBuffer.set (DoubleBuffer::VSYNC, optionGetSyncToVblank ());
-    doubleBuffer.set (DoubleBuffer::PERSISTENT_BACK_BUFFER, useFbo);
+    doubleBuffer.set (DoubleBuffer::HAVE_PERSISTENT_BACK_BUFFER, useFbo);
+    doubleBuffer.set (DoubleBuffer::NEED_PERSISTENT_BACK_BUFFER, alwaysSwap);
     doubleBuffer.render (tmpRegion, fullscreen);
 
     lastMask = mask;
@@ -2038,12 +2150,18 @@ PrivateGLScreen::paintOutputs (CompOutput::ptrList &outputs,
 bool
 PrivateGLScreen::hasVSync ()
 {
-   #ifdef USE_GLES
-   return false;
-   #else
+    #ifdef USE_GLES
+    return false;
+    #else
     return GL::waitVideoSync && optionGetSyncToVblank () && 
-           GL::unthrottledFrames < 5;
-   #endif
+	   doubleBuffer.hardwareVSyncFunctional ();
+    #endif
+}
+
+bool
+PrivateGLScreen::requiredForcedRefreshRate ()
+{
+    return incorrectRefreshRate;
 }
 
 bool
@@ -2068,6 +2186,21 @@ PrivateGLScreen::prepareDrawing ()
     updateRenderMode ();
     if (wasFboEnabled != GL::fboEnabled)
 	CompositeScreen::get (screen)->damageScreen ();
+}
+
+bool
+PrivateGLScreen::driverIsBlacklisted (const char *regex) const
+{
+    /*
+     * regex matching is VERY expensive, so only do it when the result might
+     * be different to last time. The gl* variables never change value...
+     */
+    if (prevRegex != regex)
+    {
+	prevBlacklisted = blacklisted (regex, glVendor, glRenderer, glVersion);
+	prevRegex = regex;
+    }
+    return prevBlacklisted;
 }
 
 GLTexture::BindPixmapHandle

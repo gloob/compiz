@@ -317,19 +317,10 @@ draw_window_decoration (decor_t *d)
     color.g = style->bg[GTK_STATE_NORMAL].green / 65535.0;
     color.b = style->bg[GTK_STATE_NORMAL].blue  / 65535.0;
 
-    if (d->frame_window)
-    {
-	GdkColormap *cmap;
-
-	cmap = get_colormap_for_drawable (GDK_DRAWABLE (d->pixmap));
-	gdk_drawable_set_colormap (GDK_DRAWABLE (d->pixmap), cmap);
-	gdk_drawable_set_colormap (GDK_DRAWABLE (d->buffer_pixmap), cmap);
-	drawable = GDK_DRAWABLE (d->buffer_pixmap);
-    }
-    else if (d->buffer_pixmap)
-	drawable = GDK_DRAWABLE (d->buffer_pixmap);
+    if (d->buffer_pixmap)
+	drawable = d->buffer_pixmap;
     else
-	drawable = GDK_DRAWABLE (d->pixmap);
+	drawable = d->pixmap;
 
     cr = gdk_cairo_create (GDK_DRAWABLE (drawable));
     if (!cr)
@@ -732,7 +723,7 @@ calc_button_size (decor_t *d)
 	button_width += 17;
 
     if (button_width)
-	button_width++;
+	++button_width;
 
     d->button_width = button_width;
 }

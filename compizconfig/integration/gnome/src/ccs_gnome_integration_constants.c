@@ -119,7 +119,7 @@ const CCSGNOMEIntegratedSettingNames ccsGNOMEIntegratedSettingNames =
     { "raise_window_key", "raise" },
     { "maximize_window_vertically_key", "maximize_vertically" },
     { "maximize_window_horizontally_key", "maximize_horizontally" },
-    { "unmaximize_window_key", "unmaximize" },
+    { "unmaximize_or_minimize_window_key", "unmaximize" },
     { "maximize_window_key", "maximize" },
     { "minimize_window_key", "minimize" },
     { "toggle_window_maximized_key", "toggle_maximized" },
@@ -388,7 +388,7 @@ ccsGNOMEIntegrationInitializeIntegratedSettingsList (gpointer data)
     array[109].pluginName = plugins->CORE;
     array[109].settingName = settings->CORE_MAXIMIZE_WINDOW_HORIZONTALLY_KEY.compizName;
     array[110].pluginName = plugins->CORE;
-    array[110].settingName = settings->CORE_UNMAXIMIZE_WINDOW_KEY.compizName;
+    array[110].settingName = settings->CORE_UNMAXIMIZE_OR_MINIMIZE_WINDOW_KEY.compizName;
     array[111].pluginName = plugins->CORE;
     array[111].settingName = settings->CORE_MAXIMIZE_WINDOW_KEY.compizName;
     array[112].pluginName = plugins->CORE;
@@ -416,7 +416,7 @@ const CCSGNOMEIntegratedSettingsList *
 ccsGNOMEIntegratedSettingsList ()
 {
     static GOnce initIntegratedSettings = G_ONCE_INIT;
-    static const CCSGNOMEIntegratedSettingsList settings[CCS_GNOME_INTEGRATED_SETTINGS_LIST_SIZE];
+    static CCSGNOMEIntegratedSettingsList settings[CCS_GNOME_INTEGRATED_SETTINGS_LIST_SIZE];
 
     g_once (&initIntegratedSettings, ccsGNOMEIntegrationInitializeIntegratedSettingsList, (gpointer) settings);
 
@@ -431,10 +431,14 @@ ccsGNOMEGSettingsIntegrationInitializeIntegratedSchemasQuarks (gpointer data)
     static const char *org_compiz_integrated = "org.compiz.integrated";
     static const char *org_gnome_desktop_wm_keybindings = "org.gnome.desktop.wm.keybindings";
     static const char *org_gnome_desktop_wm_preferences = "org.gnome.desktop.wm.preferences";
+    static const char *org_gnome_settings_daemon_plugins_media_keys = "org.gnome.settings-daemon.plugins.media-keys";
+    static const char *org_gnome_desktop_default_applications_terminal = "org.gnome.desktop.default-applications.terminal";
 
     quarks->ORG_COMPIZ_INTEGRATED = g_quark_from_string (org_compiz_integrated);
     quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS = g_quark_from_string (org_gnome_desktop_wm_keybindings);
     quarks->ORG_GNOME_DESKTOP_WM_PREFERENCES = g_quark_from_string (org_gnome_desktop_wm_preferences);
+    quarks->ORG_GNOME_SETTINGS_DAEMON_PLUGINS_MEDIA_KEYS = g_quark_from_string (org_gnome_settings_daemon_plugins_media_keys);
+    quarks->ORG_GNOME_DESKTOP_DEFAULT_APPLICATIONS_TERMINAL = g_quark_from_string (org_gnome_desktop_default_applications_terminal);
 
     return NULL;
 }
@@ -443,7 +447,7 @@ const CCSGSettingsWrapperIntegratedSchemasQuarks *
 ccsGNOMEGSettingsWrapperQuarks ()
 {
     static GOnce initIntegratedSchemaQuarks = G_ONCE_INIT;
-    static const CCSGSettingsWrapperIntegratedSchemasQuarks quarks;
+    static CCSGSettingsWrapperIntegratedSchemasQuarks quarks;
 
     g_once (&initIntegratedSchemaQuarks, ccsGNOMEGSettingsIntegrationInitializeIntegratedSchemasQuarks, (gpointer) &quarks);
 
@@ -501,7 +505,7 @@ ccsGNOMEGSettingsIntegrationPopulateSettingNameToIntegratedSchemasQuarksHashTabl
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_AUTORAISE_DELAY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_PREFERENCES));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_AUTORAISE.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_PREFERENCES));
     g_hash_table_insert (thumbnailHashTable, (gpointer) names->THUMBNAIL_CURRENT_VIEWPORT.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_COMMAND_TERMINAL.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_COMMAND_TERMINAL.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_DEFAULT_APPLICATIONS_TERMINAL));
     g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_COMMAND_WINDOW_SCREENSHOT.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
     g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_COMMAND_SCREENSHOT.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
     g_hash_table_insert (rotateHashTable, (gpointer) names->ROTATE_ROTATE_RIGHT_WINDOW_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
@@ -605,15 +609,15 @@ ccsGNOMEGSettingsIntegrationPopulateSettingNameToIntegratedSchemasQuarksHashTabl
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_RAISE_WINDOW_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_VERTICALLY_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_HORIZONTALLY_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
-    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
+    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_OR_MINIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MINIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_TOGGLE_WINDOW_MAXIMIZED_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_TERMINAL_KEY.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_WINDOW_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_MAIN_MENU_KEY.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_KEY.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_TERMINAL_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_SETTINGS_DAEMON_PLUGINS_MEDIA_KEYS));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_WINDOW_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_SETTINGS_DAEMON_PLUGINS_MEDIA_KEYS));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_SETTINGS_DAEMON_PLUGINS_MEDIA_KEYS));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_MAIN_MENU_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_KEY.compizName, GINT_TO_POINTER (quarks->ORG_GNOME_DESKTOP_WM_KEYBINDINGS));
     g_hash_table_insert (unityshellHashTable, (gpointer) names->UNITYSHELL_SHOW_HUD.compizName, GINT_TO_POINTER (quarks->ORG_COMPIZ_INTEGRATED));
 
     return masterHashTable;
@@ -769,7 +773,7 @@ ccsGNOMEIntegrationPopulateCategoriesHashTables ()
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_RAISE_WINDOW_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_VERTICALLY_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_HORIZONTALLY_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
-    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_WINDOW_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
+    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_OR_MINIMIZE_WINDOW_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MINIMIZE_WINDOW_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_TOGGLE_WINDOW_MAXIMIZED_KEY.compizName, (gpointer) categories->WINDOW_KEYBINDINGS);
@@ -933,13 +937,13 @@ ccsGNOMEIntegrationPopulateSpecialTypesHashTables ()
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_RAISE_WINDOW_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_VERTICALLY_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_HORIZONTALLY_KEY.compizName, GINT_TO_POINTER (OptionKey));
-    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (OptionKey));
+    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_OR_MINIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MINIMIZE_WINDOW_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_TOGGLE_WINDOW_MAXIMIZED_KEY.compizName, GINT_TO_POINTER (OptionKey));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_TERMINAL_KEY.compizName, GINT_TO_POINTER (OptionKey));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_WINDOW_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (OptionKey));
-    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (OptionKey));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_TERMINAL_KEY.compizName, GINT_TO_POINTER (OptionSpecial));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_WINDOW_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (OptionSpecial));
+    g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_COMMAND_SCREENSHOT_KEY.compizName, GINT_TO_POINTER (OptionSpecial));
     g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_MAIN_MENU_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (gnomecompatHashTable, (gpointer) names->GNOMECOMPAT_RUN_KEY.compizName, GINT_TO_POINTER (OptionKey));
     g_hash_table_insert (unityshellHashTable, (gpointer) names->UNITYSHELL_SHOW_HUD.compizName, GINT_TO_POINTER (OptionKey));
@@ -1096,7 +1100,7 @@ ccsGNOMEIntegrationPopulateSettingNameToGNOMENameHashTables ()
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_RAISE_WINDOW_KEY.compizName, (gpointer) names->CORE_RAISE_WINDOW_KEY.gnomeName);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_VERTICALLY_KEY.compizName, (gpointer) names->CORE_MAXIMIZE_WINDOW_VERTICALLY_KEY.gnomeName);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_HORIZONTALLY_KEY.compizName, (gpointer) names->CORE_MAXIMIZE_WINDOW_HORIZONTALLY_KEY.gnomeName);
-    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_WINDOW_KEY.compizName, (gpointer) names->CORE_UNMAXIMIZE_WINDOW_KEY.gnomeName);
+    g_hash_table_insert (coreHashTable, (gpointer) names->CORE_UNMAXIMIZE_OR_MINIMIZE_WINDOW_KEY.compizName, (gpointer) names->CORE_UNMAXIMIZE_OR_MINIMIZE_WINDOW_KEY.gnomeName);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MAXIMIZE_WINDOW_KEY.compizName, (gpointer) names->CORE_MAXIMIZE_WINDOW_KEY.gnomeName);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_MINIMIZE_WINDOW_KEY.compizName, (gpointer) names->CORE_MINIMIZE_WINDOW_KEY.gnomeName);
     g_hash_table_insert (coreHashTable, (gpointer) names->CORE_TOGGLE_WINDOW_MAXIMIZED_KEY.compizName, (gpointer) names->CORE_TOGGLE_WINDOW_MAXIMIZED_KEY.gnomeName);

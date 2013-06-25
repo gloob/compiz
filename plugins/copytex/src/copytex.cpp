@@ -37,10 +37,11 @@ static GLTexture::Matrix _identity_matrix = {
 };
 
 GLTexture::List
-CopyPixmap::bindPixmapToTexture (Pixmap pixmap,
-				 int width,
-				 int height,
-				 int depth)
+CopyPixmap::bindPixmapToTexture (Pixmap                       pixmap,
+				 int                          width,
+				 int                          height,
+				 int                          depth,
+				 compiz::opengl::PixmapSource source)
 {
     if (depth != 32 && depth != 24)
 	return GLTexture::List ();
@@ -355,9 +356,9 @@ CopytexScreen::~CopytexScreen ()
 bool
 CopytexPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	 return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) &&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }

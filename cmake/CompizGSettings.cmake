@@ -55,6 +55,9 @@ function (compiz_add_install_recompile_gsettings_schemas _schemadir_user)
 		 execute_process (COMMAND cmake -DSCHEMADIR_USER=${_schemadir_user} -DSCHEMADIR_ROOT=${GSETTINGS_GLOBAL_INSTALL_DIR} -P ${COMPIZ_CMAKE_MODULE_PATH}/recompile_gsettings_schemas_in_dir_user_env.cmake)
 		 ")
 
+	# We must also recompile on uninstall too
+	compiz_add_code_to_uninstall_target ("cmake -DSCHEMADIR_USER=${_schemadir_user} -DSCHEMADIR_ROOT=${GSETTINGS_GLOBAL_INSTALL_DIR} -P ${COMPIZ_CMAKE_MODULE_PATH}/recompile_gsettings_schemas_in_dir_user_env.cmake" ${CMAKE_CURRENT_BINARY_DIR})
+
     endif (GSETTINGS_GLOBAL_INSTALL_DIR_SET)
 
 endfunction (compiz_add_install_recompile_gsettings_schemas)
@@ -76,8 +79,14 @@ function (compiz_install_gsettings_schema _src _dst)
 
 	# Install schema file
 	install (CODE "
-		 execute_process (COMMAND cmake -DFILE=${_src} -DINSTALLDIR_USER=${_dst} -DINSTALLDIR_ROOT=${GSETTINGS_GLOBAL_INSTALL_DIR} -P ${COMPIZ_CMAKE_MODULE_PATH}/copy_file_install_user_env.cmake)
+		 execute_process (COMMAND cmake -DFILE=${_src}
+                                                -DINSTALLDIR_USER=${_dst} 
+                                                -DINSTALLDIR_ROOT=${GSETTINGS_GLOBAL_INSTALL_DIR} 
+                                                -P ${COMPIZ_CMAKE_MODULE_PATH}/copy_file_install_user_env.cmake)
 		 ")
+
+	get_filename_component (_src_file_basename ${_src} NAME)
+	compiz_add_code_to_uninstall_target ("cmake -E remove -f ${_dst}/${_src_file_basename}" ${CMAKE_CURRENT_BINARY_DIR})
 
 	get_property (COMPIZ_INHIBIT_ADD_INSTALL_RECOMPILE_RULE_SET
 		      GLOBAL
@@ -205,7 +214,18 @@ function (compiz_gsettings_schema _name _src _dst _inst)
 	add_custom_target (${_name}_gsettings_schema
 			   DEPENDS ${_dst})
 
-	compiz_install_gsettings_schema (${_dst} ${_inst})
+	set (_install_gsettings_schema ON)
+
+	foreach (ARG ${ARGN})
+	    if (${ARG} STREQUAL "NOINSTALL")
+		set (_install_gsettings_schema OFF)
+	    endif (${ARG} STREQUAL "NOINSTALL")
+	endforeach ()
+
+	if (_install_gsettings_schema)
+	    compiz_install_gsettings_schema (${_dst} ${_inst})
+	endif (_install_gsettings_schema)
+
 	add_gsettings_schema_to_recompilation_list (${_name}_gsettings_schema)
     endif ()
 endfunction ()

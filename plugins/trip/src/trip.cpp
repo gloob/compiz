@@ -2,7 +2,7 @@
  *
  * Compiz trip plugin
  *
- * trip.c
+ * trip.cpp
  *
  * Copyright : (C) 2010 by Scott Moreau
  * E-mail    : oreaus@gmail.com
@@ -559,6 +559,13 @@ TripScreen::~TripScreen ()
 
 Ripple::Ripple () :    
     dScreen (TripScreen::get (screen))
+    radius (0),
+    rMod (0),
+    duration (0),
+    timer (0),
+    width (0),
+    height (0),
+    adjust (false)
 {
 }
 
@@ -569,10 +576,10 @@ Ripple::~Ripple ()
 bool
 TripPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-	!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-	!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }

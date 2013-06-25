@@ -27,6 +27,7 @@
 
 #include "privates.h"
 
+#include <set>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -245,17 +246,25 @@ PrivateGLScreen::paintOutputRegion (const GLMatrix   &transform,
     CompWindow    *w;
     GLWindow      *gw;
     int           windowMask, odMask;
-    CompWindow	  *fullscreenWindow = NULL;
     bool          status, unredirectFS;
     bool          withOffset = false;
     GLMatrix      vTransform;
     CompPoint     offXY;
+    std::set<CompWindow*> unredirected;
 
     CompWindowList                   pl;
     CompWindowList::reverse_iterator rit;
 
     unredirectFS = CompositeScreen::get (screen)->
 	getOption ("unredirect_fullscreen_windows")->value ().b ();
+
+    const CompMatch &unredirectable = CompositeScreen::get (screen)->
+	getOption ("unredirect_match")->value ().match ();
+
+    const CompString &blacklist =
+	getOption ("unredirect_driver_blacklist")->value ().s ();
+
+    bool blacklisted = driverIsBlacklisted (blacklist.c_str ());
 
     if (mask & PAINT_SCREEN_TRANSFORMED_MASK)
     {
@@ -275,7 +284,7 @@ PrivateGLScreen::paintOutputRegion (const GLMatrix   &transform,
 
     if (!(mask & PAINT_SCREEN_NO_OCCLUSION_DETECTION_MASK))
     {
-	FullscreenRegion fs (*output);
+	FullscreenRegion fs (*output, screen->region ());
 
 	/* detect occlusions */
 	for (rit = pl.rbegin (); rit != pl.rend (); ++rit)
@@ -345,37 +354,62 @@ PrivateGLScreen::paintOutputRegion (const GLMatrix   &transform,
 	    if (w->alpha ())
 		flags |= FullscreenRegion::Alpha;
 	    
+	    /* Anything which was not occlusion detected is not a suitable
+	     * candidate for unredirection either */
+	    if (!status)
+		flags |= FullscreenRegion::NoOcclusionDetection;
+
+	    CompositeWindow *cw = CompositeWindow::get (w);
+
 	    /*
 	     * Windows with alpha channels can partially occlude windows
 	     * beneath them and so neither should be unredirected in that case.
+	     *
+	     * Performance note:  unredirectable.evaluate is SLOW because it
+	     * involves regex matching. Too slow to do on every window for
+	     * every frame. So we only call it if a window is redirected AND
+	     * potentially needs unredirecting. This means changes to
+	     * unredirect_match while a window is unredirected already may not
+	     * take effect until it is un-fullscreened again. But that's better
+	     * than the high price of regex matching on every frame.
 	     */
 	    if (unredirectFS &&
-	        !(mask & PAINT_SCREEN_TRANSFORMED_MASK) &&
-	        fs.isCoveredBy (w->region (), flags))
+		!blacklisted &&
+		!(mask & PAINT_SCREEN_TRANSFORMED_MASK) &&
+		!(mask & PAINT_SCREEN_WITH_TRANSFORMED_WINDOWS_MASK) &&
+		fs.isCoveredBy (w->region (), flags) &&
+		(!cw->redirected () || unredirectable.evaluate (w)))
 	    {
-	        fullscreenWindow = w;
+		unredirected.insert (w);
 	    }
 	    else
 	    {
-	        CompositeWindow *cw = CompositeWindow::get (w);
-	        if (!cw->redirected ())
-	        {
-		    // 1. GLWindow::release to force gw->priv->needsRebind
-		    gw->release ();
+		if (!cw->redirected ())
+		{
+		    if (fs.allowRedirection (w->region ()))
+		    {
+			// 1. GLWindow::release to force gw->priv->needsRebind
+			gw->release ();
 
-		    // 2. GLWindow::bind, which redirects the window,
-		    //    rebinds the pixmap, and then rebinds the pixmap
-		    //    to a texture.
-		    gw->bind ();
+			// 2. GLWindow::bind, which redirects the window,
+			//    rebinds the pixmap, and then rebinds the pixmap
+			//    to a texture.
+			gw->bind ();
 
-		    // 3. Your window is now redirected again with the
-		    //    latest pixmap contents.
-	        }
+			// 3. Your window is now redirected again with the
+			//    latest pixmap contents.
+		    }
+		    else
+		    {
+			unredirected.insert (w);
+		    }
+		}
 	    }
 	}
     }
 
-    if (fullscreenWindow)
+    /* Unredirect any redirected fullscreen windows */
+    foreach (CompWindow *fullscreenWindow, unredirected)
 	CompositeWindow::get (fullscreenWindow)->unredirect ();
 
     if (!(mask & PAINT_SCREEN_NO_BACKGROUND_MASK))
@@ -389,7 +423,12 @@ PrivateGLScreen::paintOutputRegion (const GLMatrix   &transform,
 	if (w->destroyed ())
 	    continue;
 
-	if (w == fullscreenWindow)
+        gw = GLWindow::get (w);
+
+        /* Release any queued ConfigureWindow requests now */
+        gw->priv->configureLock->release ();
+
+	if (unredirected.find (w) != unredirected.end ())
 	    continue;
 
 	if (!w->shaded ())
@@ -397,8 +436,6 @@ PrivateGLScreen::paintOutputRegion (const GLMatrix   &transform,
 	    if (!w->isViewable ())
 		continue;
 	}
-
-	gw = GLWindow::get (w);
 
 	const CompRegion &clip =
 	    (!(mask & PAINT_SCREEN_NO_OCCLUSION_DETECTION_MASK)) ?
@@ -609,7 +646,19 @@ GLScreen::glPaintOutput (const GLScreenPaintAttrib &sAttrib,
 
 	sTransform.toScreenSpace (output, -DEFAULT_Z_CAMERA);
 
-	if (!region.isEmpty ())
+	/*
+	 * Sometimes region might be empty but we still need to force the
+	 * repaint. This can happen when a fullscreen window is unredirected,
+	 * and damageScreen is called. CompositeScreen::handlePaintTimeout
+	 * then subtracts the whole screen of damage because it's an overlay
+	 * and we're left with an empty damage region.
+	 * Even when this happens we may want to force the repaint if
+	 * windows are getting transformed (and so the unredirected window
+	 * needs to be redirected again).
+	 */
+	if (!region.isEmpty () ||
+	    (mask & PAINT_SCREEN_FULL_MASK) ||
+	    (mask & PAINT_SCREEN_WITH_TRANSFORMED_WINDOWS_MASK))
 	    priv->paintOutputRegion (sTransform, region, output, mask);
 
 	return true;
@@ -635,8 +684,6 @@ GLScreen::glPaintCompositedOutput (const CompRegion    &region,
     WRAPABLE_HND_FUNCTN (glPaintCompositedOutput, region, fbo, mask)
 
     GLMatrix sTransform;
-    std::vector<GLfloat> vertexData;
-    std::vector<GLfloat> textureData;
     const GLTexture::Matrix & texmatrix = fbo->tex ()->matrix ();
     GLVertexBuffer *streamingBuffer = GLVertexBuffer::streamingBuffer ();
 
@@ -649,7 +696,7 @@ GLScreen::glPaintCompositedOutput (const CompRegion    &region,
 	GLfloat ty1 = 1.0 - COMP_TEX_COORD_Y (texmatrix, 0.0f);
 	GLfloat ty2 = 1.0 - COMP_TEX_COORD_Y (texmatrix, screen->height ());
 
-	vertexData = {
+	const GLfloat vertexData[] = {
 	    0.0f,                    0.0f,                     0.0f,
 	    0.0f,                    (float)screen->height (), 0.0f,
 	    (float)screen->width (), 0.0f,                     0.0f,
@@ -659,7 +706,7 @@ GLScreen::glPaintCompositedOutput (const CompRegion    &region,
 	    (float)screen->width (), 0.0f,                     0.0f,
 	};
 
-	textureData = {
+	const GLfloat textureData[] = {
 	    tx1, ty1,
 	    tx1, ty2,
 	    tx2, ty1,
@@ -683,7 +730,7 @@ GLScreen::glPaintCompositedOutput (const CompRegion    &region,
 	    GLfloat ty1 = 1.0 - COMP_TEX_COORD_Y (texmatrix, pBox->y1);
 	    GLfloat ty2 = 1.0 - COMP_TEX_COORD_Y (texmatrix, pBox->y2);
 
-	    vertexData = {
+	    const GLfloat vertexData[] = {
 		(float)pBox->x1, (float)pBox->y1, 0.0f,
 		(float)pBox->x1, (float)pBox->y2, 0.0f,
 		(float)pBox->x2, (float)pBox->y1, 0.0f,
@@ -693,7 +740,7 @@ GLScreen::glPaintCompositedOutput (const CompRegion    &region,
 		(float)pBox->x2, (float)pBox->y1, 0.0f,
 	    };
 
-	    textureData = {
+	    const GLfloat textureData[] = {
 		tx1, ty1,
 		tx1, ty2,
 		tx2, ty1,

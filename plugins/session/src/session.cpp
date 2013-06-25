@@ -2,7 +2,7 @@
  *
  * Compiz session plugin
  *
- * session.c
+ * session.cpp
  *
  * Copyright (c) 2008 Travis Watkins <amaranth@ubuntu.com>
  * Copyright (c) 2008 Danny Baumann <maniac@opencompositing.org>
@@ -781,8 +781,8 @@ SessionWindow::SessionWindow (CompWindow *w) :
 bool
 SessionPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
 
-    return true;
+    return false;
 }

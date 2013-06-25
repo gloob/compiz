@@ -10,10 +10,7 @@ if (BUILD_GNOME)
     )
 
     set (_keybindings_files
-	 50-compiz-launchers.xml.in
 	 50-compiz-navigation.xml.in
-	 50-compiz-screenshot.xml.in
-	 50-compiz-system.xml.in
 	 50-compiz-windows.xml.in)
 
     set (_keybindings_files_translated "")
@@ -37,5 +34,5 @@ if (BUILD_GNOME)
 	DESTINATION ${datadir}/gnome-control-center/keybindings
     )
 
-    add_custom_target (compiz.desktop ALL SOURCES ${desktop_file})
+    add_custom_target (compiz.desktop-file ALL DEPENDS ${desktop_file})
 endif (BUILD_GNOME)

@@ -35,7 +35,7 @@ setFunctions (bool enabled)
 {
     OPACIFY_SCREEN (screen);
 
-    screen->handleEventSetEnabled (os, enabled);
+    screen->handleEventSetEnabled (os, os->isToggle);
 
     foreach (CompWindow *w, screen->windows ())
     {
@@ -57,18 +57,17 @@ OpacifyWindow::setOpacity (int fOpacity)
 	cWindow->addDamage ();
 
     opacified = true;
-    opacity = fOpacity;
+    opacity   = fOpacity;
 }
 
 /* Resets the Window to the original opacity if it still exists.
 */
 
 void
-OpacifyScreen::resetOpacity (Window  id)
+OpacifyScreen::resetWindowOpacity (Window id)
 {
-    CompWindow *w;
+    CompWindow *w = screen->findWindow (id);
 
-    w = screen->findWindow (id);
     if (!w)
 	return;
 
@@ -78,18 +77,49 @@ OpacifyScreen::resetOpacity (Window  id)
     ow->cWindow->addDamage ();
 }
 
+/* Resets all the windows on the screen to the original opacity
+ * if necessary. Then reset active.
+*/
+void
+OpacifyScreen::resetScreenOpacity ()
+{
+    if (active)
+    {
+	clearPassive();
+	resetWindowOpacity(active);
+	active = 0;
+    }
+}
+
 /* Resets the opacity of windows on the passive list.
 */
 void
 OpacifyScreen::clearPassive ()
 {
+    CompWindow *win;
+    int        activeOpacity = optionGetActiveOpacity ();
+    GLushort   targetOpacity = OPAQUE * activeOpacity / 100;
+
+    foreach (Window xid, passive)
+    {
+	win = screen->findWindow (xid);
+
+	if (!win)
+	    continue;
+
+	OPACIFY_WINDOW (win);
+
+	ow->setOpacity (std::max (targetOpacity,
+				  ow->gWindow->paintAttrib ().opacity));
+	resetWindowOpacity (xid);
+    }
+
     passive.clear ();
 }
 
 /* Dim an (inactive) window. Place it on the passive list and
  * update passiveNum. Then change the opacity.
  */
-
 void
 OpacifyWindow::dim ()
 {
@@ -110,26 +140,13 @@ OpacifyWindow::dim ()
  */
 
 int
-OpacifyScreen::passiveWindows (CompRegion     fRegion)
+OpacifyScreen::passiveWindows (CompRegion fRegion)
 {
-    bool       flag = false;
-    int        i = 0;
+    bool flag = false;
+    int  i    = 0;
 
     /* Clear the list first to prevent memleaks */
-    foreach (Window xid, passive)
-    {
-	CompWindow *win = screen->findWindow (xid);
-
-	if (!win)
-	    continue;
-
-	OPACIFY_WINDOW (win);
-
-	resetOpacity (xid);
-	ow->setOpacity (MAX (OPAQUE * optionGetActiveOpacity () / 100,
-			ow->gWindow->paintAttrib ().opacity));
-    }
-    passive.clear ();
+    clearPassive ();
 
     foreach (CompWindow *w, screen->windows ())
     {
@@ -138,18 +155,19 @@ OpacifyScreen::passiveWindows (CompRegion     fRegion)
 	    flag = true;
 	    continue;
 	}
-	if (!flag)
-	    continue;
-	if (!optionGetWindowMatch ().evaluate (w))
-	    continue;
-	if (!w->isViewable () || w->minimized ())
+
+	if (!flag				    ||
+	    !optionGetWindowMatch ().evaluate (w)   ||
+	    !w->isViewable ()			    ||
+	    w->minimized ())
 	    continue;
 
 	intersect = w->region ().intersected (fRegion);
+
 	if (!intersect.isEmpty ())
 	{
 	    OpacifyWindow::get (w)->dim ();
-	    i++;
+	    ++i;
 	}
     }
 
@@ -177,17 +195,16 @@ OpacifyWindow::handleEnter ()
 	    return;
 	}
 
-	os->clearPassive ();
-	os->resetOpacity (os->active);
-	os->active = 0;
+	os->resetScreenOpacity ();
+
 	return;
     }
 
     if (!window || os->active != window->id () || os->justMoved)
     {
 	os->justMoved = false;
-	os->resetOpacity (os->active);
-	os->active = 0;
+	os->resetWindowOpacity (os->active);
+	os->active    = 0;
     }
 
     if (!window)
@@ -196,10 +213,8 @@ OpacifyWindow::handleEnter ()
     if (window->id () != os->active && !window->shaded () &&
 	os->optionGetWindowMatch ().evaluate (window))
     {
-	int num;
-
 	os->active = window->id ();
-	num = os->passiveWindows (window->region ());
+	int num    = os->passiveWindows (window->region ());
 
 	if (num || os->optionGetOnlyIfBlock ())
 	    setOpacity (MAX (OPAQUE * os->optionGetActiveOpacity () / 100,
@@ -214,7 +229,7 @@ bool
 OpacifyScreen::handleTimeout ()
 {
     if (newActive)
-        OpacifyWindow::get (newActive)->handleEnter ();
+	OpacifyWindow::get (newActive)->handleEnter ();
 
     return false;
 }
@@ -225,18 +240,20 @@ OpacifyScreen::handleTimeout ()
 bool
 OpacifyScreen::checkDelay ()
 {
-    if (optionGetFocusInstant () && newActive &&
-	(newActive->id () == screen->activeWindow ()))
+    if (optionGetFocusInstant ()    &&
+	newActive		    &&
+	newActive->id () == screen->activeWindow ())
 	return true;
+
     if (!optionGetTimeout ())
 	return true;
-    if (!newActive || (newActive->id () == screen->root ()))
-	return false;
-    if (newActive->type () & (CompWindowTypeDesktopMask |
+
+    if (!newActive			    ||
+	newActive->id () == screen->root () ||
+	newActive->type () & (CompWindowTypeDesktopMask |
 			      CompWindowTypeDockMask))
-    {
 	return false;
-    }
+
     if (optionGetNoDelayChange () && !passive.empty ())
 	return true;
 
@@ -245,22 +262,19 @@ OpacifyScreen::checkDelay ()
 
 bool
 OpacifyWindow::glPaint (const GLWindowPaintAttrib &attrib,
-			const GLMatrix		  &transform,
-			const CompRegion	  &region,
-			unsigned int		  mask)
+			const GLMatrix            &transform,
+			const CompRegion          &region,
+			unsigned int              mask)
 {
     if (opacified)
     {
 	GLWindowPaintAttrib wAttrib = attrib;
-
-	wAttrib.opacity = opacity;
+	wAttrib.opacity             = opacity;
 
 	return gWindow->glPaint (wAttrib, transform, region, mask);
     }
     else
-    {
 	return gWindow->glPaint (attrib, transform, region, mask);
-    }
 
     return false;
 }
@@ -272,70 +286,70 @@ OpacifyWindow::glPaint (const GLWindowPaintAttrib &attrib,
  * micro seconds, or directly if od->timeout is 0 (no delay).
  *
  */
-
 void
 OpacifyScreen::handleEvent (XEvent *event)
 {
-
     screen->handleEvent (event);
 
     if (!isToggle)
 	return;
 
-    switch (event->type) {
-    case EnterNotify:
-	Window id;
+    switch (event->type)
+    {
+	case EnterNotify:
+	    Window id;
 
-	id = event->xcrossing.window;
+	    id        = event->xcrossing.window;
 	    newActive = screen->findTopLevelWindow (id);
 
-	if (timeoutHandle.active ())
-	    timeoutHandle.stop ();
+	    if (timeoutHandle.active ())
+		timeoutHandle.stop ();
 
-	if (checkDelay ())
-	    handleTimeout ();
-	else
-	    timeoutHandle.start ();
-     	break;
-    case ConfigureNotify:
+	    if (checkDelay ())
+		handleTimeout ();
+	    else
+		timeoutHandle.start ();
 
-	if (active != event->xconfigure.window)
 	    break;
 
-	clearPassive ();
-	if (active)
-	{
-	    CompWindow *w;
+	case FocusIn:
+	    resetScreenOpacity();
+	    break;
 
-	    w = screen->findWindow (active);
-	    if (w)
-		passiveWindows (w->region ());
-	}
-     	break;
-    default:
-	break;
+	case ConfigureNotify:
+
+	    if (active != event->xconfigure.window)
+		break;
+
+	    clearPassive ();
+
+	    if (active)
+	    {
+		CompWindow *w = screen->findWindow (active);
+
+		if (w)
+		    passiveWindows (w->region ());
+	    }
+
+	    break;
+
+	default:
+	    break;
     }
 }
 
 /* Toggle opacify on/off. We are in Display-context, make sure we handle all
  * screens.
  */
-
 bool
 OpacifyScreen::toggle (CompAction         *action,
 		       CompAction::State  state,
 		       CompOption::Vector options)
 {
     isToggle = !isToggle;
+
     if (!isToggle && optionGetToggleReset ())
-    {
-	if (active)
-	{
-	    clearPassive ();
-	    resetOpacity (active);
-	    active = 0;
-	}
-    }
+	resetScreenOpacity();
 
     setFunctions (isToggle);
 
@@ -348,27 +362,24 @@ OpacifyScreen::toggle (CompAction         *action,
  *  here is 'init_toggle' so when that changes, we adjust our internal values
  *  appropriately
  */
-
 void
 OpacifyScreen::optionChanged (CompOption              *option,
 			      OpacifyOptions::Options num)
 {
-    switch (num) {
-    case OpacifyOptions::InitToggle:
-	isToggle = option->value ().b ();
-	setFunctions (isToggle);
-	if (active)
-	{
-	    clearPassive ();
-	    resetOpacity (active);
-	    active = 0;
-	}
-	break;
+    switch (num)
+    {
+	case OpacifyOptions::InitToggle:
+	    isToggle = option->value ().b ();
+	    setFunctions (isToggle);
+	    resetScreenOpacity();
+	    break;
+
 	case OpacifyOptions::Timeout:
-	timeoutHandle.setTimes (optionGetTimeout (), optionGetTimeout () * 1.2);
-	break;
-    default:
-	break;
+	    timeoutHandle.setTimes (optionGetTimeout (), optionGetTimeout () * 1.2);
+	    break;
+
+	default:
+	    break;
     }
 }
 
@@ -376,14 +387,13 @@ OpacifyScreen::optionChanged (CompOption              *option,
  *  is created and we set our custom variables to it and also register to
  *  paint this window
  */
-
 OpacifyWindow::OpacifyWindow (CompWindow *window) :
     PluginClassHandler <OpacifyWindow, CompWindow> (window),
-    window (window),
-    cWindow (CompositeWindow::get (window)),
-    gWindow (GLWindow::get (window)),
+    window    (window),
+    cWindow   (CompositeWindow::get (window)),
+    gWindow   (GLWindow::get (window)),
     opacified (false),
-    opacity (100)
+    opacity   (100)
 {
     GLWindowInterface::setHandler (gWindow, false);
 }
@@ -392,12 +402,11 @@ OpacifyWindow::OpacifyWindow (CompWindow *window) :
  *  is created and we set our custom variables to it and also register to
  *  handle X.org events when they come through
  */
-
 OpacifyScreen::OpacifyScreen (CompScreen *screen) :
     PluginClassHandler <OpacifyScreen, CompScreen> (screen),
-    isToggle (true),
+    isToggle  (optionGetInitToggle ()),
     newActive (NULL),
-    active (screen->activeWindow ()),
+    active    (screen->activeWindow ()),
     intersect (emptyRegion),
     justMoved (false)
 {
@@ -414,19 +423,16 @@ OpacifyScreen::OpacifyScreen (CompScreen *screen) :
     optionSetTimeoutNotify (boost::bind (&OpacifyScreen::optionChanged,
 								 this, _1, _2));
 
-    screen->handleEventSetEnabled (this, optionGetInitToggle ());
+    setFunctions (isToggle);
 }
 
 bool
 OpacifyPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
-    if (!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI))
-	return false;
-    if (!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-
-    return true;
+    return false;
 }

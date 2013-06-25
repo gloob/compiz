@@ -39,7 +39,7 @@
 #define EDGE_STATE (CompAction::StateInitEdge)
 
 class ScalePluginVTable :
-    public CompPlugin::VTableForScreenAndWindow<ScaleScreen, ScaleWindow>
+    public CompPlugin::VTableForScreenAndWindow<ScaleScreen, ScaleWindow, COMPIZ_SCALE_ABI>
 {
     public:
 
@@ -137,7 +137,7 @@ ScaleWindow::scalePaintDecoration (const GLWindowPaintAttrib& attrib,
 	GLWindowPaintAttrib sAttrib (attrib);
 	GLTexture           *icon;
 
-	icon = priv->gWindow->getIcon (96, 96);
+	icon = priv->gWindow->getIcon (512, 512);
 	if (!icon)
 	    icon = priv->spScreen->gScreen->defaultIcon ();
 
@@ -425,29 +425,27 @@ void
 PrivateScaleScreen::layoutSlotsForArea (const CompRect& workArea,
 					int             nWindows)
 {
-    int i, j;
-    int x, y, width, height;
-    int lines, n, nSlots;
-    int spacing;
-
     if (!nWindows)
 	return;
 
-    lines   = sqrt (nWindows + 1);
-    spacing = optionGetSpacing ();
-    nSlots  = 0;
+    int x, y, width, height;
+    int n;
+
+    int lines   = sqrt (nWindows + 1);
+    int spacing = optionGetSpacing ();
+    int nSlots  = 0;
 
     y      = workArea.y () + spacing;
     height = (workArea.height () - (lines + 1) * spacing) / lines;
 
-    for (i = 0; i < lines; i++)
+    for (int i = 0; i < lines; i++)
     {
 	n = MIN (nWindows - nSlots, ceilf ((float) nWindows / lines));
 
 	x     = workArea.x () + spacing;
 	width = (workArea.width () - (n + 1) * spacing) / n;
 
-	for (j = 0; j < n; j++)
+	for (int j = 0; j < n; j++)
 	{
 	    slots[this->nSlots].setGeometry (x, y, width, height);
 
@@ -1216,9 +1214,24 @@ PrivateScaleScreen::scaleInitiateCommon (CompAction         *action,
 	if (!lastActiveNum)
 	    lastActiveNum = screen->activeNum () - 1;
 
-	previousActiveWindow = screen->activeWindow ();
-	lastActiveWindow     = screen->activeWindow ();
-	selectedWindow       = screen->activeWindow ();
+	Window active_window = screen->activeWindow ();
+	bool found_active = false;
+
+	foreach (ScaleWindow *sw, windows)
+	{
+	    if (sw->window->id() == active_window)
+	    {
+		found_active = true;
+		break;
+	    }
+	}
+
+	if (!found_active)
+	    active_window = None;
+
+	previousActiveWindow = active_window;
+	lastActiveWindow     = active_window;
+	selectedWindow       = active_window;
 	hoveredWindow        = None;
 
 	this->state = ScaleScreen::Out;
@@ -1493,10 +1506,7 @@ ScaleScreen::relayoutSlots (const CompMatch& match)
 void
 PrivateScaleScreen::windowRemove (CompWindow *w)
 {
-    if (!w)
-	return;
-
-    if (state == ScaleScreen::Idle || state == ScaleScreen::In)
+    if (!w || state == ScaleScreen::Idle || state == ScaleScreen::In)
 	return;
 
     foreach (ScaleWindow *lw, windows)
@@ -1752,6 +1762,8 @@ PrivateScaleWindow::damageRect (bool            initial,
     return status;
 }
 
+template class PluginClassHandler<ScaleScreen, CompScreen, COMPIZ_SCALE_ABI>;
+
 ScaleScreen::ScaleScreen (CompScreen *s) :
     PluginClassHandler<ScaleScreen, CompScreen, COMPIZ_SCALE_ABI> (s),
     priv (new PrivateScaleScreen (s))
@@ -1762,6 +1774,8 @@ ScaleScreen::~ScaleScreen ()
 {
     delete priv;
 }
+
+template class PluginClassHandler<ScaleWindow, CompWindow, COMPIZ_SCALE_ABI>;
 
 ScaleWindow::ScaleWindow (CompWindow *w) :
     PluginClassHandler<ScaleWindow, CompWindow, COMPIZ_SCALE_ABI> (w),
@@ -1919,16 +1933,18 @@ ScaleScreen::setOption (const CompString  &name,
 bool
 ScalePluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-        !CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
 
-    CompPrivate p;
-    p.uval = COMPIZ_SCALE_ABI;
-    screen->storeValue ("scale_ABI", p);
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+    {
+	CompPrivate p;
+	p.uval = COMPIZ_SCALE_ABI;
+	screen->storeValue ("scale_ABI", p);
+	return true;
+    }
 
-    return true;
+    return false;
 }
 
 void

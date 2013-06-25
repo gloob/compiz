@@ -52,6 +52,7 @@ typedef std::vector<CompWindow *> CompWindowVector;
 
 extern bool       replaceCurrentWm;
 extern bool       debugOutput;
+extern bool       sendStartupMessage;
 
 extern CompScreen   *screen;
 
@@ -108,6 +109,9 @@ struct CompActiveWindowHistory {
     int    y;
     int    activeNum;
 };
+
+class ScreenInterface;
+extern template class WrapableInterface<CompScreen, ScreenInterface>;
 
 /**
  * Interface to an abstract screen.

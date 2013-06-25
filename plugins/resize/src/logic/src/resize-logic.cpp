@@ -99,11 +99,13 @@ ResizeLogic::~ResizeLogic()
 void
 ResizeLogic::handleEvent (XEvent *event)
 {
-    switch (event->type) {
+    switch (event->type)
+    {
 	case KeyPress:
 	    if (event->xkey.root == mScreen->root ())
 		handleKeyEvent (event->xkey.keycode);
 	    break;
+
 	case ButtonRelease:
 	    if (event->xbutton.root == mScreen->root ())
 	    {
@@ -120,27 +122,33 @@ ResizeLogic::handleEvent (XEvent *event)
 		}
 	    }
 	    break;
+
 	case MotionNotify:
 	    if (event->xmotion.root == mScreen->root ())
 		handleMotionEvent (pointerX, pointerY);
 	    break;
+
 	case EnterNotify:
 	case LeaveNotify:
 	    if (event->xcrossing.root == mScreen->root ())
 		handleMotionEvent (pointerX, pointerY);
 	    break;
+
 	case ClientMessage:
 	    if (event->xclient.message_type == Atoms::wmMoveResize)
 	    {
-		CompWindowInterface *w;
 		unsigned long	    type = event->xclient.data.l[2];
 
 		if (type <= WmMoveResizeSizeLeft ||
 		    type == WmMoveResizeSizeKeyboard)
 		{
+		    CompWindowInterface *w;
 		    w = mScreen->findWindow (event->xclient.window);
 		    if (w)
 		    {
+			mScreen->freeWindowInterface (w);
+			w = NULL;
+
 			CompOption::Vector o (0);
 
 			o.push_back (CompOption ("window",
@@ -162,7 +170,8 @@ ResizeLogic::handleEvent (XEvent *event)
 			    /* TODO: not only button 1 */
 			    if (pointerMods & Button1Mask)
 			    {
-				static unsigned int mask[] = {
+				static unsigned int mask[] =
+				{
 				    ResizeUpMask | ResizeLeftMask,
 				    ResizeUpMask,
 				    ResizeUpMask | ResizeRightMask,
@@ -215,6 +224,7 @@ ResizeLogic::handleEvent (XEvent *event)
 		}
 	    }
 	    break;
+
 	case DestroyNotify:
 	    if (w && w->id () == event->xdestroywindow.window)
 	    {
@@ -222,12 +232,15 @@ ResizeLogic::handleEvent (XEvent *event)
 		terminateResize (&options->optionGetInitiateKey (), 0, noOptions ());
 	    }
 	    break;
+
 	case UnmapNotify:
 	    if (w && w->id () == event->xunmap.window)
 	    {
 		terminateResize (&options->optionGetInitiateButton (), 0, noOptions ());
 		terminateResize (&options->optionGetInitiateKey (), 0, noOptions ());
 	    }
+	    break;
+
 	default:
 	    break;
     }
@@ -339,9 +352,7 @@ ResizeLogic::handleEvent (XEvent *event)
 		    centered = true;
 	    }
 	    else
-	    {
 		centered = false;
-	    }
 	}
     }
 
@@ -366,10 +377,8 @@ ResizeLogic::handleKeyEvent (KeyCode keycode)
 {
     if (grabIndex && w)
     {
-	int	   widthInc, heightInc;
-
-	widthInc  = w->sizeHints ().width_inc;
-	heightInc = w->sizeHints ().height_inc;
+	int widthInc  = w->sizeHints ().width_inc;
+	int heightInc = w->sizeHints ().height_inc;
 
 	if (widthInc < MIN_KEY_WIDTH_INC)
 	    widthInc = MIN_KEY_WIDTH_INC;
@@ -383,24 +392,20 @@ ResizeLogic::handleKeyEvent (KeyCode keycode)
 		continue;
 
 	    if (mask & rKeys[i].warpMask)
-	    {
 		XWarpPointer (mScreen->dpy (), None, None, 0, 0, 0, 0,
 			      rKeys[i].dx * widthInc, rKeys[i].dy * heightInc);
-	    }
 	    else
 	    {
-		int x, y, left, top, width, height;
-
 		CompWindow::Geometry server = w->serverGeometry ();
 		const CompWindowExtents    &border  = w->border ();
 
-		left   = server.x () - border.left;
-		top    = server.y () - border.top;
-		width  = border.left + server.width () + border.right;
-		height = border.top  + server.height () + border.bottom;
+		int left   = server.x () - border.left;
+		int top    = server.y () - border.top;
+		int width  = border.left + server.width () + border.right;
+		int height = border.top  + server.height () + border.bottom;
 
-		x = left + width  * (rKeys[i].dx + 1) / 2;
-		y = top  + height * (rKeys[i].dy + 1) / 2;
+		int x = left + width  * (rKeys[i].dx + 1) / 2;
+		int y = top  + height * (rKeys[i].dy + 1) / 2;
 
 		mScreen->warpPointer (x - pointerX, y - pointerY);
 
@@ -593,6 +598,7 @@ ResizeLogic::finishResizing ()
 
     resizeInformationAtom->deleteProperty (w->id ());
 
+    mScreen->freeWindowInterface (w);
     w = NULL;
 }
 
@@ -1236,22 +1242,22 @@ ResizeLogic::initiateResize (CompAction		*action,
 	       just prevent input to the window */
 
 	    if (!mask)
+	    {
+		mScreen->freeWindowInterface (w);
 		return true;
+	    }
 	}
 
-	if (mScreen->otherGrabExist ("resize", NULL))
+	if (mScreen->otherGrabExist ("resize", NULL) ||
+	    this->w ||
+	    (w->type () & (CompWindowTypeDesktopMask |
+	                   CompWindowTypeDockMask |
+	                   CompWindowTypeFullscreenMask)) ||
+	    w->overrideRedirect ())
+	{
+	    mScreen->freeWindowInterface (w);
 	    return false;
-
-	if (this->w)
-	    return false;
-
-	if (w->type () & (CompWindowTypeDesktopMask |
-		          CompWindowTypeDockMask	 |
-		          CompWindowTypeFullscreenMask))
-	    return false;
-
-	if (w->overrideRedirect ())
-	    return false;
+	}
 
 	if (state & CompAction::StateInitButton)
 	    action->setState (action->state () | CompAction::StateTermButton);
@@ -1355,7 +1361,7 @@ ResizeLogic::initiateResize (CompAction		*action,
 	    if (sourceExternalApp)
 	    {
 		int output = w->outputDevice ();
-		int lco, tco, bco, rco;
+
 		bool sl = mScreen->outputDevs ().at (output).workArea ().left () >
 			  w->serverGeometry ().left ();
 		bool sr = mScreen->outputDevs ().at (output).workArea ().right () <
@@ -1365,17 +1371,15 @@ ResizeLogic::initiateResize (CompAction		*action,
 		bool sb = mScreen->outputDevs ().at (output).workArea ().bottom () <
 			  w->serverGeometry ().bottom ();
 
-		lco = tco = bco = rco = output;
-
 		/* Prevent resizing beyond work area edges when resize is
 		   initiated externally (e.g. with window frame or menu)
 		   and not with a key (e.g. alt+button) */
 		offWorkAreaConstrained = true;
 
-		lco = getOutputForEdge (output, TOUCH_RIGHT, sl);
-		rco = getOutputForEdge (output, TOUCH_LEFT, sr);
-		tco = getOutputForEdge (output, TOUCH_BOTTOM, st);
-		bco = getOutputForEdge (output, TOUCH_TOP, sb);
+		int lco = getOutputForEdge (output, TOUCH_RIGHT, sl);
+		int rco = getOutputForEdge (output, TOUCH_LEFT, sr);
+		int tco = getOutputForEdge (output, TOUCH_BOTTOM, st);
+		int bco = getOutputForEdge (output, TOUCH_TOP, sb);
 
 		/* Now we need to form one big rect which describes
 		 * the available workarea */
@@ -1407,6 +1411,8 @@ ResizeLogic::initiateResize (CompAction		*action,
 
         maximized_vertically = false;
     }
+    else if (w)
+	mScreen->freeWindowInterface (w);
 
     return false;
 }
@@ -1549,6 +1555,8 @@ ResizeLogic::initiateResizeDefaultMode (CompAction	    *action,
 	mode = ResizeOptions::ModeRectangle;
     if (w->evaluate (this->options->optionGetStretchMatch ()))
 	mode = ResizeOptions::ModeStretch;
+
+    mScreen->freeWindowInterface (w);
 
     return initiateResize (action, state, options, mode);
 }

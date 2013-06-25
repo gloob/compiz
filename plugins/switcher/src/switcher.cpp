@@ -948,7 +948,7 @@ SwitchWindow::updateIconPos (int   &wx,
 
 /* Only for the popup window */
 bool
-SwitchWindow::managed ()
+SwitchWindow::managed () const
 {
     return true;
 }
@@ -966,10 +966,10 @@ SwitchWindow::glPaint (const GLWindowPaintAttrib &attrib,
 
     if (window->id () == sScreen->popupWindow)
     {
-	int            x, y, x1, x2, cx, i;
+	int            x, y, x1, x2, cx;
 	unsigned short color[4];
 
-	CompWindow::Geometry &g = window->geometry ();
+	const CompWindow::Geometry &g = window->geometry ();
 
 	if (mask & PAINT_WINDOW_OCCLUSION_DETECTION_MASK ||
 	    sScreen->ignoreSwitcher)
@@ -1013,7 +1013,7 @@ SwitchWindow::glPaint (const GLWindowPaintAttrib &attrib,
 	wTransform.translate (cx, y, 0.0f);
 
 	glEnable (GL_BLEND);
-	for (i = 0; i < 4; i++)
+	for (int i = 0; i < 4; i++)
 	{
 	    color[i] = (unsigned int)sScreen->fgColor[i] *
 		       gWindow->lastPaintAttrib ().opacity /
@@ -1193,12 +1193,11 @@ SwitchWindow::SwitchWindow (CompWindow *window) :
 bool
 SwitchPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-        !CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI) ||
-        !CompPlugin::checkPluginABI ("compiztoolbox", COMPIZ_COMPIZTOOLBOX_ABI))
-	 return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)			&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)		&&
+	CompPlugin::checkPluginABI ("compiztoolbox", COMPIZ_COMPIZTOOLBOX_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }
-

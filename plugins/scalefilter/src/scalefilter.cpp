@@ -2,7 +2,7 @@
  *
  * Compiz scale window title filter plugin
  *
- * scalefilter.c
+ * scalefilter.cpp
  *
  * Copyright : (C) 2007 by Danny Baumann
  * E-mail    : maniac@opencompositing.org
@@ -589,11 +589,9 @@ ScalefilterWindow::ScalefilterWindow (CompWindow *w) :
 bool
 ScalefilterPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-	!CompPlugin::checkPluginABI ("scale", COMPIZ_SCALE_ABI))
-    {
-	return false;
-    }
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) &&
+	CompPlugin::checkPluginABI ("scale", COMPIZ_SCALE_ABI))
+	return true;
 
-    return true;
+    return false;
 }

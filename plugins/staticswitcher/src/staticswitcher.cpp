@@ -27,6 +27,8 @@
 
 COMPIZ_PLUGIN_20090315 (staticswitcher, StaticSwitchPluginVTable)
 
+const unsigned short ICON_SIZE = 48;
+
 const unsigned short PREVIEWSIZE = 150;
 const unsigned short BORDER = 10;
 
@@ -1244,7 +1246,7 @@ StaticSwitchWindow::glPaint (const GLWindowPaintAttrib &attrib,
 	float          px, py, pos;
 	int            count = sScreen->windows.size ();
 
-	CompWindow::Geometry &g = window->geometry ();
+	const CompWindow::Geometry &g = window->geometry ();
 
 	if (mask & PAINT_WINDOW_OCCLUSION_DETECTION_MASK ||
 	    sScreen->ignoreSwitcher)
@@ -1345,6 +1347,10 @@ StaticSwitchScreen::StaticSwitchScreen (CompScreen *screen) :
     BaseSwitchScreen (screen),
     PluginClassHandler<StaticSwitchScreen,CompScreen> (screen),
     clientLeader (None),
+    previewWidth (0),
+    previewHeight (0),
+    previewBorder (0),
+    xCount (0),
     switching (false),
     mVelocity (0.0),
     pos (0),
@@ -1431,12 +1437,11 @@ StaticSwitchWindow::StaticSwitchWindow (CompWindow *window) :
 bool
 StaticSwitchPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-        !CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI) ||
-        !CompPlugin::checkPluginABI ("compiztoolbox", COMPIZ_COMPIZTOOLBOX_ABI))
-	 return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)			&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)		&&
+	CompPlugin::checkPluginABI ("compiztoolbox", COMPIZ_COMPIZTOOLBOX_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }
-

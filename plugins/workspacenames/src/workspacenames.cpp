@@ -27,22 +27,21 @@
 CompString
 WSNamesScreen::getCurrentWSName ()
 {
-    int		currentVp;
-    int		listSize, i;
-    CompString	ret;
-    CompOption::Value::Vector names;
-    CompOption::Value::Vector vpNumbers;
+    CompString ret;
 
-    vpNumbers = optionGetViewports ();
-    names     = optionGetNames ();
+    CompOption::Value::Vector vpNumbers = optionGetViewports ();
+    CompOption::Value::Vector names     = optionGetNames ();
 
-    currentVp = screen->vp ().y () * screen->vpSize ().width () +
-		screen->vp ().x () + 1;
-    listSize  = MIN (vpNumbers.size (), names.size ());
+    int currentVp = screen->vp ().y () * screen->vpSize ().width () +
+		    screen->vp ().x () + 1;
 
-    for (i = 0; i < listSize; i++)
+    int listSize  = MIN (vpNumbers.size (), names.size ());
+
+    for (int i = 0; i < listSize; ++i)
+    {
 	if (vpNumbers[i].i () == currentVp)
 	    return names[i].s ();
+    }
 
     return ret;
 }
@@ -51,11 +50,10 @@ void
 WSNamesScreen::renderNameText ()
 {
     CompText::Attrib attrib;
-    CompString	     name;
 
     textData.clear ();
 
-    name = getCurrentWSName ();
+    CompString name = getCurrentWSName ();
 
     if (name.empty ())
 	return;
@@ -73,6 +71,7 @@ WSNamesScreen::renderNameText ()
     attrib.color[3] = optionGetFontColorAlpha ();
 
     attrib.flags = CompText::WithBackground | CompText::Ellipsized;
+
     if (optionGetBoldText ())
 	attrib.flags |= CompText::StyleBold;
 
@@ -86,60 +85,91 @@ WSNamesScreen::renderNameText ()
     textData.renderText (name, attrib);
 }
 
-void
-WSNamesScreen::drawText (const GLMatrix &matrix)
+CompPoint
+WSNamesScreen::getTextPlacementPosition ()
 {
-    GLfloat  alpha;
-    float    x, y, border = 10.0f;
     CompRect oe = screen->getCurrentOutputExtents ();
+    float x = oe.centerX () - textData.getWidth () / 2;
+    float y = 0;
+    unsigned short verticalOffset = optionGetVerticalOffset ();
 
-    x = oe.centerX () - textData.getWidth () / 2;
-
-    /* assign y (for the lower corner!) according to the setting */
     switch (optionGetTextPlacement ())
     {
 	case WorkspacenamesOptions::TextPlacementCenteredOnScreen:
 	    y = oe.centerY () + textData.getHeight () / 2;
 	    break;
-	case WorkspacenamesOptions::TextPlacementTopOfScreen:
-	case WorkspacenamesOptions::TextPlacementBottomOfScreen:
+
+	case WorkspacenamesOptions::TextPlacementTopOfScreenMinusOffset:
+	case WorkspacenamesOptions::TextPlacementBottomOfScreenPlusOffset:
 	    {
 		CompRect workArea = screen->currentOutputDev ().workArea ();
 
 		if (optionGetTextPlacement () ==
-		    WorkspacenamesOptions::TextPlacementTopOfScreen)
-    		    y = oe.y1 () + workArea.y () +
-			(2 * border) + textData.getHeight ();
-		else
+		    WorkspacenamesOptions::TextPlacementTopOfScreenMinusOffset)
 		    y = oe.y1 () + workArea.y () +
-			workArea.height () - (2 * border);
+			verticalOffset + textData.getHeight ();
+		else /* TextPlacementBottomOfScreenPlusOffset */
+		    y = oe.y1 () + workArea.y () +
+			workArea.height () - verticalOffset;
 	    }
 	    break;
+
 	default:
-	    return;
+	    return CompPoint (floor (x),
+			      oe.centerY () - textData.getHeight () / 2);
 	    break;
     }
 
+    return CompPoint (floor (x), floor (y));
+}
+
+void
+WSNamesScreen::damageTextArea ()
+{
+    const CompPoint pos (getTextPlacementPosition ());
+
+    /* The placement position is from the lower corner, so we
+     * need to move it back up by height */
+    CompRect        area (pos.x (),
+			  pos.y () - textData.getHeight (),
+			  textData.getWidth (),
+			  textData.getHeight ());
+
+    cScreen->damageRegion (area);
+}
+
+void
+WSNamesScreen::drawText (const GLMatrix &matrix)
+{
+    GLfloat  alpha = 0.0f;
+
+    /* assign y (for the lower corner!) according to the setting */
+    const CompPoint p = getTextPlacementPosition ();
+
     if (timer)
 	alpha = timer / (optionGetFadeTime () * 1000.0f);
-    else
+    else if (timeoutHandle.active ())
 	alpha = 1.0f;
 
-    textData.draw (matrix, floor (x), floor (y), alpha);
+    textData.draw (matrix, p.x (), p.y (), alpha);
 }
 
 bool
-WSNamesScreen::glPaintOutput (const GLScreenPaintAttrib	&attrib,
-			      const GLMatrix		&transform,
-			      const CompRegion		&region,
-			      CompOutput		*output,
-			      unsigned int		mask)
+WSNamesScreen::shouldDrawText ()
 {
-    bool status;
+    return textData.getWidth () && textData.getHeight ();
+}
 
-    status = gScreen->glPaintOutput (attrib, transform, region, output, mask);
+bool
+WSNamesScreen::glPaintOutput (const GLScreenPaintAttrib &attrib,
+			      const GLMatrix            &transform,
+			      const CompRegion          &region,
+			      CompOutput                *output,
+			      unsigned int              mask)
+{
+    bool status = gScreen->glPaintOutput (attrib, transform, region, output, mask);
 
-    if (textData.getWidth () && textData.getHeight ())
+    if (shouldDrawText ())
     {
 	GLMatrix sTransform (transform);
 
@@ -158,9 +188,6 @@ WSNamesScreen::preparePaint (int msSinceLastPaint)
     {
 	timer -= msSinceLastPaint;
 	timer = MAX (timer, 0);
-
-	if (!timer)
-	    textData.clear ();
     }
 
     cScreen->preparePaint (msSinceLastPaint);
@@ -169,21 +196,27 @@ WSNamesScreen::preparePaint (int msSinceLastPaint)
 void
 WSNamesScreen::donePaint ()
 {
-    /* FIXME: better only damage paint region */
-    if (timer)
-	cScreen->damageScreen ();
+    /* Only damage when the */
+    if (shouldDrawText ())
+	damageTextArea ();
+ 
+     cScreen->donePaint ();
 
-    cScreen->donePaint ();
+    /* Clear text data if done with fadeout */
+    if (!timer && !timeoutHandle.active ())
+	textData.clear ();
 }
 
 bool
 WSNamesScreen::hideTimeout ()
 {
     timer = optionGetFadeTime () * 1000;
+
+    /* Clear immediately if there is no fadeout */
     if (!timer)
 	textData.clear ();
-
-    cScreen->damageScreen ();
+ 
+    damageTextArea ();
 
     timeoutHandle.stop ();
 
@@ -203,13 +236,14 @@ WSNamesScreen::handleEvent (XEvent *event)
 	int timeout = optionGetDisplayTime () * 1000;
 
 	timer = 0;
+
 	if (timeoutHandle.active ())
 	    timeoutHandle.stop ();
 
 	renderNameText ();
 	timeoutHandle.start (timeout, timeout + 200);
 
-	cScreen->damageScreen ();
+	damageTextArea ();
     }
 }
 
@@ -234,13 +268,14 @@ WSNamesScreen::~WSNamesScreen ()
 bool
 WorkspacenamesPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-        !CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
-
     if (!CompPlugin::checkPluginABI ("text", COMPIZ_TEXT_ABI))
 	compLogMessage ("workspacenames", CompLogLevelWarn,
 			"No compatible text plugin loaded");
-    return true;
+
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
+
+    return false;
 }

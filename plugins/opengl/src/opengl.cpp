@@ -79,7 +79,7 @@ PrivateGLScreen::setOption (const CompString  &name,
 }
 
 class OpenglPluginVTable :
-    public CompPlugin::VTableForScreenAndWindow<GLScreen, GLWindow>
+    public CompPlugin::VTableForScreenAndWindow<GLScreen, GLWindow, COMPIZ_OPENGL_ABI>
 {
     public:
 
@@ -92,15 +92,16 @@ COMPIZ_PLUGIN_20090315 (opengl, OpenglPluginVTable)
 bool
 OpenglPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-        !CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) &&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI))
+    {
+	CompPrivate p;
+	p.uval = COMPIZ_OPENGL_ABI;
+	screen->storeValue ("opengl_ABI", p);
+	return true;
+    }
 
-    CompPrivate p;
-    p.uval = COMPIZ_OPENGL_ABI;
-    screen->storeValue ("opengl_ABI", p);
-
-    return true;
+    return false;
 }
 
 void

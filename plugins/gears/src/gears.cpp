@@ -48,6 +48,21 @@ gear (GLfloat inner_radius,
 
     da = 2.0 * M_PI / teeth / 4.0;
 
+    glShadeModel (GL_SMOOTH);
+
+    /* draw inside radius cylinder */
+    glBegin (GL_QUAD_STRIP);
+
+    for (i = 0; i <= teeth; i++)
+    {
+	angle = i * 2.0 * M_PI / teeth;
+	glNormal3f (-cos (angle), -sin (angle), 0.0);
+	glVertex3f (r0 * cos (angle), r0 * sin (angle), -width * 0.5);
+	glVertex3f (r0 * cos (angle), r0 * sin (angle), width * 0.5);
+    }
+
+    glEnd();
+
     glShadeModel (GL_FLAT);
 
     glNormal3f (0.0, 0.0, 1.0);
@@ -172,21 +187,6 @@ gear (GLfloat inner_radius,
     glVertex3f (r1 * cos (0), r1 * sin (0), -width * 0.5);
 
     glEnd();
-
-    glShadeModel (GL_SMOOTH);
-
-    /* draw inside radius cylinder */
-    glBegin (GL_QUAD_STRIP);
-
-    for (i = 0; i <= teeth; i++)
-    {
-	angle = i * 2.0 * M_PI / teeth;
-	glNormal3f (-cos (angle), -sin (angle), 0.0);
-	glVertex3f (r0 * cos (angle), r0 * sin (angle), -width * 0.5);
-	glVertex3f (r0 * cos (angle), r0 * sin (angle), width * 0.5);
-    }
-
-    glEnd();
 }
 
 void
@@ -198,11 +198,11 @@ GearsScreen::cubeClearTargetOutput (float      xRotate,
     glClear (GL_DEPTH_BUFFER_BIT);
 }
 
-
 void GearsScreen::cubePaintInside (const GLScreenPaintAttrib &sAttrib,
-			           const GLMatrix            &transform,
+				   const GLMatrix            &transform,
 				   CompOutput                *output,
-				   int                       size)
+				   int                       size,
+				   const GLVector            &normal)
 {
 //    CUBE_SCREEN (screen);
 
@@ -249,6 +249,8 @@ void GearsScreen::cubePaintInside (const GLScreenPaintAttrib &sAttrib,
     glDisable (GL_COLOR_MATERIAL);
 
     glEnable (GL_DEPTH_TEST);
+    glDepthMask (GL_TRUE);
+    glDepthFunc (GL_LESS);
     glTexEnvi (GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 
     glPushMatrix();
@@ -290,7 +292,7 @@ void GearsScreen::cubePaintInside (const GLScreenPaintAttrib &sAttrib,
 
     damage = true;
 
-    csScreen->cubePaintInside (sAttrib, transform, output, size);
+    csScreen->cubePaintInside (sAttrib, transform, output, size, normal);
 }
 void
 GearsScreen::preparePaint (int ms)
@@ -368,7 +370,6 @@ GearsScreen::GearsScreen (CompScreen *screen) :
     glMaterialfv (GL_FRONT, GL_AMBIENT_AND_DIFFUSE, blue);
     gear (1.3, 2.0, 0.5, 10, 0.7);
     glEndList();
-
 }
 
 GearsScreen::~GearsScreen ()
@@ -376,18 +377,15 @@ GearsScreen::~GearsScreen ()
     glDeleteLists (gear1, 1);
     glDeleteLists (gear2, 1);
     glDeleteLists (gear3, 1);
-
 }
 
 bool
 GearsPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	 return false;
-    if (!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI))
-	 return false;
-    if (!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	 return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }

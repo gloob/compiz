@@ -35,6 +35,12 @@
 
 #include <boost/shared_ptr.hpp>
 
+#include <core/configurerequestbuffer.h>
+
+#include "syncserverwindow.h"
+#include "asyncserverwindow.h"
+
+#define XWINDOWCHANGES_INIT {0, 0, 0, 0, 0, None, 0}
 
 namespace compiz {namespace X11
 {
@@ -106,15 +112,50 @@ struct CompGroup;
 
 typedef CompWindowExtents CompFullscreenMonitorSet;
 
-class PrivateWindow {
+class X11SyncServerWindow :
+    public compiz::window::SyncServerWindow
+{
+    public:
+
+	X11SyncServerWindow (Display      *dpy,
+			     const Window *w,
+			     const Window *frame);
+
+	bool queryAttributes (XWindowAttributes &attrib);
+	bool queryFrameAttributes (XWindowAttributes &attrib);
+	XRectangle * queryShapeRectangles(int kind, int *count, int *ordering);
+
+    private:
+
+	Display      *mDpy;
+	const Window *mWindow;
+	const Window *mFrame;
+};
+
+class PrivateWindow :
+    public compiz::window::SyncServerWindow,
+    public compiz::window::AsyncServerWindow
+{
 
     public:
 	PrivateWindow ();
 	~PrivateWindow ();
 
+	bool queryAttributes (XWindowAttributes &attrib);
+	bool queryFrameAttributes (XWindowAttributes &attrib);
+	XRectangle * queryShapeRectangles (int kind, int *count, int *ordering);
+	int  requestConfigureOnClient (const XWindowChanges &xwc,
+				       unsigned int valueMask);
+	int  requestConfigureOnWrapper (const XWindowChanges &xwc,
+					unsigned int valueMask);
+	int  requestConfigureOnFrame (const XWindowChanges &xwc,
+				      unsigned int valueMask);
+	void sendSyntheticConfigureNotify ();
+	bool hasCustomShape () const;
+
 	void recalcNormalHints ();
 
-	void updateFrameWindow ();
+	bool updateFrameWindow ();
 
 	void setWindowMatrix ();
 
@@ -126,19 +167,23 @@ class PrivateWindow {
 
 	bool isInvisible() const;
 
-	static bool stackLayerCheck (CompWindow *w,
-				     Window     clientLeader,
-				     CompWindow *below);
+	static bool stackLayerCheck (CompWindow       *w,
+				     Window           clientLeader,
+				     CompWindow       *below,
+				     const ServerLock &lock);
 
-	static bool avoidStackingRelativeTo (CompWindow *w);
+	static bool avoidStackingRelativeTo (CompWindow *w, const ServerLock &lock);
 
-	static CompWindow * findSiblingBelow (CompWindow *w,
-					      bool       aboveFs);
+	static CompWindow * findSiblingBelow (CompWindow       *w,
+					      bool             aboveFs,
+					      const ServerLock &lock);
 
-	static CompWindow * findLowestSiblingBelow (CompWindow *w);
+	static CompWindow * findLowestSiblingBelow (CompWindow       *w,
+						    const ServerLock &lock);
 
-	static bool validSiblingBelow (CompWindow *w,
-				       CompWindow *sibling);
+	static bool validSiblingBelow (CompWindow       *w,
+				       CompWindow       *sibling,
+				       const ServerLock &lock);
 
 	void saveGeometry (int mask);
 
@@ -147,19 +192,22 @@ class PrivateWindow {
 	void reconfigureXWindow (unsigned int   valueMask,
 				 XWindowChanges *xwc);
 
-	static bool stackDocks (CompWindow     *w,
-				CompWindowList &updateList,
-				XWindowChanges *xwc,
-				unsigned int   *mask);
+	static bool stackDocks (CompWindow       *w,
+				CompWindowList   &updateList,
+				XWindowChanges   *xwc,
+				unsigned int     *mask,
+				const ServerLock &lock);
 
-	static bool stackTransients (CompWindow     *w,
-				     CompWindow     *avoid,
-				     XWindowChanges *xwc,
-				     CompWindowList &updateList);
+	static bool stackTransients (CompWindow       *w,
+				     CompWindow       *avoid,
+				     XWindowChanges   *xwc,
+				     CompWindowList   &updateList,
+				     const ServerLock &lock);
 
-	static void stackAncestors (CompWindow *w,
-				    XWindowChanges *xwc,
-				    CompWindowList &updateList);
+	static void stackAncestors (CompWindow       *w,
+				    XWindowChanges   *xwc,
+				    CompWindowList   &updateList,
+				    const ServerLock &lock);
 
 	static bool isAncestorTo (CompWindow *transient,
 				  CompWindow *ancestor);
@@ -171,11 +219,13 @@ class PrivateWindow {
 	int addWindowSizeChanges (XWindowChanges *xwc,
 				  CompWindow::Geometry old);
 
-	int addWindowStackChanges (XWindowChanges *xwc,
-				   CompWindow     *sibling);
+	int addWindowStackChanges (XWindowChanges   *xwc,
+				   CompWindow       *sibling,
+				   const ServerLock &lock);
 
 	static CompWindow * findValidStackSiblingBelow (CompWindow *w,
-							CompWindow *sibling);
+							CompWindow *sibling,
+							const ServerLock &lock);
 
 	void ensureWindowVisibility ();
 
@@ -252,7 +302,7 @@ class PrivateWindow {
 						       int            gravity,
 						       int	      direction);
 
-	void updateSize ();
+	bool updateSize ();
 
 	bool getUserTime (Time& time);
 	void setUserTime (Time time);
@@ -359,6 +409,7 @@ class PrivateWindow {
 	typedef std::pair <XWindowChanges, unsigned int> XWCValueMask;
 
 	compiz::X11::PendingEventQueue pendingConfigures;
+	bool receivedMapRequestAndAwaitingMap;
 
 	char *startupId;
 	char *resName;
@@ -371,6 +422,7 @@ class PrivateWindow {
 
 	CompWindowExtents input;
 	CompWindowExtents serverInput;
+	CompWindowExtents lastServerInput;
 	CompWindowExtents border;
 	CompWindowExtents output;
 
@@ -396,6 +448,9 @@ class PrivateWindow {
 	Time lastCloseRequestTime;
 
 	bool nextMoveImmediate;
+
+	X11SyncServerWindow                            syncServerWindow;
+	compiz::window::configure_buffers::Buffer::Ptr configureBuffer;
 };
 
 #endif

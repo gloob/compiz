@@ -387,7 +387,8 @@ PrivateVertexBuffer::PrivateVertexBuffer () :
     nTextures (0),
     vertexOffset (0),
     maxVertices (-1),
-    program (NULL)
+    program (NULL),
+    autoProgram (0)
 {
     if (!GL::genBuffers)
 	return;
@@ -522,7 +523,7 @@ int PrivateVertexBuffer::render (const GLMatrix            *projection,
     // set per-plugin uniforms
     for (unsigned int i = 0; i < uniforms.size (); i++)
     {
-	uniforms[i]->set (program);
+	uniforms[i]->set (tmpProgram);
     }
 
     //convert paint attribs to 0-1 range

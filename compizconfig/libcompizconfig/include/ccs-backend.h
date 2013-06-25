@@ -22,6 +22,7 @@
 #ifndef CCS_BACKEND_H
 #define CCS_BACKEND_H
 
+#include <ccs-fwd.h>
 #include <ccs-object.h>
 #include <ccs-string.h>
 #include <ccs-list.h>
@@ -29,19 +30,6 @@
 
 COMPIZCONFIG_BEGIN_DECLS
 
-typedef struct _CCSSetting	  CCSSetting;
-typedef struct _CCSPlugin         CCSPlugin;
-typedef struct _CCSContext	  CCSContext;
-typedef struct _CCSBackend	  CCSBackend;
-typedef struct _CCSBackendInfo    CCSBackendInfo;
-typedef struct _CCSBackendPrivate CCSBackendPrivate;
-typedef struct _CCSBackendInterface  CCSBackendInterface;
-typedef struct _CCSIntegration    CCSIntegration;
-
-typedef struct _CCSSettingValue CCSSettingValue;
-typedef enum _CCSSettingType CCSSettingType;
-
-typedef struct _CCSIntegratedSettingInfo CCSIntegratedSettingInfo;
 typedef struct _CCSIntegratedSettingInfoInterface CCSIntegratedSettingInfoInterface;
 
 typedef const char * (*CCSIntegratedSettingInfoPluginName) (CCSIntegratedSettingInfo *);
@@ -68,8 +56,7 @@ struct _CCSIntegratedSettingInfo
     CCSObject object;
 };
 
-typedef struct _CCSIntegratedSetting CCSIntegratedSetting;
-typedef struct _CCSIntegratedSettingInterface CCSIntegratedSettingInterface;
+typedef struct _CCSIntegratedSettingInterface     CCSIntegratedSettingInterface;
 
 typedef CCSSettingValue * (*CCSIntegratedSettingReadValue) (CCSIntegratedSetting *, CCSSettingType);
 typedef void (*CCSIntegratedSettingWriteValue) (CCSIntegratedSetting *, CCSSettingValue *, CCSSettingType);
@@ -131,7 +118,6 @@ ccsSharedIntegratedSettingInfoNew (const char *pluginName,
 				   CCSSettingType type,
 				   CCSObjectAllocationInterface *ai);
 
-typedef struct _CCSIntegratedSettingsStorage CCSIntegratedSettingsStorage;
 typedef struct _CCSIntegratedSettingsStorageInterface CCSIntegratedSettingsStorageInterface;
 
 /**
@@ -219,7 +205,7 @@ unsigned int ccsCCSIntegratedSettingsStorageInterfaceGetType ();
 CCSIntegratedSettingsStorage *
 ccsIntegratedSettingsStorageDefaultImplNew (CCSObjectAllocationInterface *ai);
 
-typedef struct _CCSIntegratedSettingFactory CCSIntegratedSettingFactory;
+
 typedef struct _CCSIntegratedSettingFactoryInterface CCSIntegratedSettingFactoryInterface;
 
 typedef CCSIntegratedSetting * (*CCSIntegratedSettingFactoryCreateIntegratedSettingForCCSSettingNameAndType) (CCSIntegratedSettingFactory *factory,
@@ -265,8 +251,7 @@ ccsIntegratedSettingFactoryCreateIntegratedSettingForCCSSettingNameAndType (CCSI
 void
 ccsFreeIntegratedSettingFactory (CCSIntegratedSettingFactory *factory);
 
-typedef struct _CCSIntegration CCSIntegration;
-typedef struct _CCSIntegrationInterface CCSIntegrationInterface;
+typedef struct _CCSIntegrationInterface           CCSIntegrationInterface;
 
 typedef CCSIntegratedSetting * (*CCSIntegrationGetIntegratedSetting) (CCSIntegration *integration,
 								      const char *pluginName,
@@ -362,8 +347,6 @@ struct _CCSBackendInfo
     Bool profileSupport;     /* does the backend support profiles? */
     unsigned int refCount;   /* reference count */
 };
-
-typedef CCSBackendInterface * (*BackendGetInfoProc) (void);
 
 typedef void (*CCSBackendExecuteEventsFunc) (CCSBackend *backend, unsigned int flags);
 
@@ -497,10 +480,7 @@ Bool ccsBackendDeleteProfile (CCSBackend *backend, CCSContext *context, char *na
 void ccsBackendSetIntegration (CCSBackend *backend, CCSIntegration *integration);
 void ccsFreeBackend (CCSBackend *backend);
 
-typedef struct _CCSDynamicBackend	  CCSDynamicBackend;
-typedef struct _CCSDynamicBackendPrivate CCSDynamicBackendPrivate;
 typedef struct _CCSDynamicBackendInterface  CCSDynamicBackendInterface;
-typedef struct _CCSInterfaceTable         CCSInterfaceTable;
 
 /**
  * @brief The _CCSDynamicBackend struct
@@ -544,14 +524,6 @@ CCSBackend * ccsDynamicBackendGetRawBackend (CCSDynamicBackend *);
 unsigned int ccsCCSDynamicBackendInterfaceGetType ();
 
 void ccsFreeDynamicBackend (CCSDynamicBackend *);
-
-/**
- * @brief ccsOpenBackend
- * @param name the name of the backend to open
- * @param interface storage for this backend's interface
- * @return a dlopen handle for this backend
- */
-CCSBackend * ccsOpenBackend (const CCSInterfaceTable *, CCSContext *context, const char *name);
 
 /**
  * @brief ccsBackendNewWithDynamicInterface

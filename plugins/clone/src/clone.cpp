@@ -413,6 +413,8 @@ CloneScreen::terminate (CompAction         *action,
 void
 CloneScreen::setStrutsForCloneWindow (Clone *clone)
 {
+#if 0
+    // Pointless code - needs fixing
     CompOutput *output = &screen->outputDevs ()[clone->dst];
     XRectangle *rect = NULL;
     CompStruts *struts;
@@ -470,6 +472,12 @@ CloneScreen::setStrutsForCloneWindow (Clone *clone)
     }
 
     wStruts = struts;
+    /*
+     * ^ FIXME: This code does nothing. Looks like it was meant to be:
+     *              *w->struts() = struts;
+     *          However that is not legal. CompWindow needs a setStruts().
+     */
+#endif
 }
 
 void
@@ -581,10 +589,10 @@ CloneScreen::~CloneScreen ()
 bool
 ClonePluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-	!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-	!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-   return true;
+    return false;
 }

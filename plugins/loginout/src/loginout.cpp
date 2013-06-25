@@ -245,7 +245,7 @@ LoginoutScreen::LoginoutScreen (CompScreen *screen) :
      * ourselves.
      */
 
-    sprintf (buf, "WM_S%d", scr);
+    snprintf (buf, 128, "WM_S%d", scr);
 
     wmSnSelectionWindow = XInternAtom (screen->dpy (), buf, 0);
 
@@ -267,7 +267,7 @@ LoginoutScreen::~LoginoutScreen ()
     char buf[128];
     int  scr = DefaultScreen (screen->dpy ());
 
-    sprintf (buf, "WM_S%d", scr);
+    snprintf (buf, 128, "WM_S%d", scr);
 
     XDeleteProperty (screen->dpy (), wmSnSelectionWindow,
 		     kdeLogoutInfoAtom);
@@ -311,10 +311,10 @@ LoginoutWindow::~LoginoutWindow ()
 bool
 LoginoutPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-	!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-	!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }

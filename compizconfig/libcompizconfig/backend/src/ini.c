@@ -451,15 +451,15 @@ writeSetting (CCSBackend *backend,
     case TypeString:
 	{
 	    char *value;
-	    if (ccsGetString (setting, &value))
+	    if (ccsGetString (setting, (const char **) &value))
 		ccsIniSetString (data->iniFile, ccsPluginGetName (ccsSettingGetParent (setting)),
- 				 keyName, value);
+				 keyName, value);
 	}
 	break;
     case TypeMatch:
 	{
 	    char *value;
-	    if (ccsGetMatch (setting, &value))
+	    if (ccsGetMatch (setting, (const char **) &value))
 		ccsIniSetString (data->iniFile, ccsPluginGetName (ccsSettingGetParent (setting)),
 				 keyName, value);
 	}
@@ -615,7 +615,7 @@ scanConfigDir (char * filePath)
     if (nFile <= 0)
 	return NULL;
 
-    for (i = 0; i < nFile; i++)
+    for (i = 0; i < nFile; ++i)
     {
 	pos = strrchr (nameList[i]->d_name, '.');
 	if (pos)

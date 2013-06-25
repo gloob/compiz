@@ -1,7 +1,7 @@
 /*
  * Animation plugin for compiz/beryl
  *
- * animation.c
+ * dream.cpp
  *
  * Copyright : (C) 2006 Erkin Bahceci
  * E-mail    : erkinbah@gmail.com
@@ -107,7 +107,7 @@ DreamAnim::step ()
 
     GridModel::GridObject *object = mModel->objects ();
     unsigned int n = mModel->numObjects ();
-    for (unsigned int i = 0; i < n; i++, object++)
+    for (unsigned int i = 0; i < n; ++i, ++object)
     {
 	Point3d &objPos = object->position ();
 	Point &objGridPos = object->gridPosition ();

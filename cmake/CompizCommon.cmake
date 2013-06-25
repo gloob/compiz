@@ -1,5 +1,7 @@
 cmake_minimum_required (VERSION 2.6)
 
+include (FindPkgConfig)
+
 if ("${CMAKE_CURRENT_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_BINARY_DIR}")
     message (SEND_ERROR "Building in the source directory is not supported.")
     message (FATAL_ERROR "Please remove the created \"CMakeCache.txt\" file, the \"CMakeFiles\" directory and create a build directory and call \"${CMAKE_COMMAND} <path to the sources>\".")
@@ -18,11 +20,18 @@ cmake_policy (SET CMP0011 OLD)
 
 set (CMAKE_SKIP_RPATH FALSE)
 
-option (BUILD_GLES "Build against GLESv2 instead of GL" OFF)
+pkg_check_modules (GL QUIET gl)
+set (BUILD_GLES_DEFAULT OFF)
+if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm.*" OR NOT GL_FOUND)
+    set (BUILD_GLES_DEFAULT ON)
+endif ()
+option (BUILD_GLES "Build against GLESv2 instead of GL" ${BUILD_GLES_DEFAULT})
+
 option (COMPIZ_BUILD_WITH_RPATH "Leave as ON unless building packages" ON)
 option (COMPIZ_RUN_LDCONFIG "Leave OFF unless you need to run ldconfig after install")
 option (COMPIZ_PACKAGING_ENABLED "Enable to manually set prefix, exec_prefix, libdir, includedir, datadir" OFF)
 option (COMPIZ_BUILD_TESTING "Build Unit Tests" ON)
+option (BUILD_XORG_GTEST "Build Xorg GTest integration tests" ON)
 
 set (COMPIZ_DATADIR ${CMAKE_INSTALL_PREFIX}/share)
 set (COMPIZ_METADATADIR ${CMAKE_INSTALL_PREFIX}/share/compiz)
@@ -40,7 +49,17 @@ set (
 )
 
 # Almost everything is a shared library now, so almost everything needs -fPIC
-set (COMMON_FLAGS "-fPIC -Wall -Wl,-zdefs")
+set (COMMON_FLAGS "-fPIC -Wall")
+
+option (COMPIZ_UNUSED_PRIVATE_FIELD_WARNINGS "Warn unused private fields" OFF)
+if (NOT COMPIZ_UNUSED_PRIVATE_FIELD_WARNINGS)
+    set (COMMON_FLAGS "${COMMON_FLAGS} -Wno-unused-private-field")
+endif ()
+
+option (COMPIZ_UNUSED_LOCAL_TYPEDEFS_WARNINGS "Warn about unused local typedefs" OFF)
+if (NOT COMPIZ_UNUSED_LOCAL_TYPEDEFS_WARNINGS)
+    set (COMMON_FLAGS "${COMMON_FLAGS} -Wno-unused-local-typedefs")
+endif (NOT COMPIZ_UNUSED_LOCAL_TYPEDEFS_WARNINGS)
 
 option (COMPIZ_DEPRECATED_WARNINGS "Warn about declarations marked deprecated" OFF)
 if (NOT COMPIZ_DEPRECATED_WARNINGS)
@@ -64,6 +83,11 @@ endif ()
 
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_FLAGS}")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMMON_FLAGS}")
+
+set (COMMON_LINKER_FLAGS "-Wl,-zdefs")
+set (CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${COMMON_LINKER_FLAGS}")
+set (CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${COMMON_LINKER_FLAGS}")
+set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${COMMON_LINKER_FLAGS}")
 
 if (IS_DIRECTORY ${CMAKE_SOURCE_DIR}/.bzr)
     set(IS_BZR_REPO 1)
@@ -222,9 +246,25 @@ function (compiz_discover_tests EXECUTABLE)
 	endforeach ()
     endif (${COVERAGE_BUILD_TYPE} MATCHES "coverage")
 
+    set (XORG_GTEST_WRAPPER_REQUIRED 0)
+
+    foreach (ARG ${ARGN})
+	if (${ARG} STREQUAL "WITH_XORG_GTEST")
+	    set (XORG_GTEST_WRAPPER_REQUIRED 1)
+	endif (${ARG} STREQUAL "WITH_XORG_GTEST")
+    endforeach ()
+
+    set (COMPIZ_DISCOVER_TESTS_CMD
+	 ${CMAKE_BINARY_DIR}/compiz_gtest/compiz_discover_gtest_tests ${CMAKE_CURRENT_BINARY_DIR}/${EXECUTABLE})
+
+    if (XORG_GTEST_WRAPPER_REQUIRED)
+	set (COMPIZ_DISCOVER_TESTS_CMD ${COMPIZ_DISCOVER_TESTS_CMD} --wrapper ${COMPIZ_XORG_GTEST_WRAPPER})
+    endif (XORG_GTEST_WRAPPER_REQUIRED)
+
     add_custom_command (TARGET ${EXECUTABLE}
 			POST_BUILD
-			COMMAND ${CMAKE_CURRENT_BINARY_DIR}/${EXECUTABLE} --gtest_list_tests | ${CMAKE_BINARY_DIR}/compiz_gtest/compiz_discover_gtest_tests ${CMAKE_CURRENT_BINARY_DIR}/${EXECUTABLE}
+			COMMAND ${CMAKE_CURRENT_BINARY_DIR}/${EXECUTABLE}
+			--gtest_list_tests | ${COMPIZ_DISCOVER_TESTS_CMD}
 			WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 			COMMENT "Discovering Tests in ${EXECUTABLE}"
 			VERBATIM)
@@ -443,8 +483,12 @@ macro (compiz_add_plugins_in_folder folder)
     )
 
     foreach (_plugin ${_plugins_in})
-        get_filename_component (_plugin_dir ${_plugin} PATH)
-        add_subdirectory (${folder}/${_plugin_dir})
+	get_filename_component (_plugin_dir ${_plugin} PATH)
+	string (TOUPPER ${_plugin_dir} _plugin_upper)
+	if (NOT COMPIZ_DISABLE_PLUGIN_${_plugin_upper})
+	    add_subdirectory (${folder}/${_plugin_dir})
+	    set (COMPIZ_ENABLED_PLUGIN_${_plugin_upper} Y CACHE INTERNAL "")
+	endif ()
     endforeach ()
 endmacro ()
 
@@ -927,13 +971,76 @@ endfunction ()
 
 #### uninstall
 
+function (compiz_add_code_to_uninstall_target CODE WORKING_DIRECTORY)
+
+    set_property (GLOBAL
+		  APPEND
+		  PROPERTY COMPIZ_UNINSTALL_CODE_TARGETS
+		  ${CODE})
+
+    set_property (GLOBAL
+		  APPEND
+		  PROPERTY COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS
+		  ${WORKING_DIRECTORY})
+
+endfunction ()
+
 macro (compiz_add_uninstall)
+
    if (NOT _compiz_uninstall_rule_created)
 	compiz_set(_compiz_uninstall_rule_created TRUE)
 
 	set (_file "${CMAKE_BINARY_DIR}/cmake_uninstall.cmake")
 
-	file (WRITE  ${_file} "if (NOT EXISTS \"${CMAKE_BINARY_DIR}/install_manifest.txt\")\n")
+	file (WRITE ${_file} "message (STATUS \"Uninstalling\")\n")
+
+	get_property (COMPIZ_UNINSTALL_CODE_TARGETS_SET
+		      GLOBAL
+		      PROPERTY COMPIZ_UNINSTALL_CODE_TARGETS
+		      SET)
+
+	get_property (COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS_SET
+		      GLOBAL
+		      PROPERTY COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS
+		      SET)
+
+	if (COMPIZ_UNINSTALL_CODE_TARGETS_SET AND
+	    COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS_SET)
+
+	    get_property (COMPIZ_UNINSTALL_CODE_TARGETS
+			  GLOBAL
+			  PROPERTY COMPIZ_UNINSTALL_CODE_TARGETS)
+
+	    get_property (COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS
+			  GLOBAL
+			  PROPERTY COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS)
+
+	    list (LENGTH COMPIZ_UNINSTALL_CODE_TARGETS COMPIZ_UNINSTALL_CODE_TARGETS_LEN)
+	    math (EXPR COMPIZ_UNINSTALL_CODE_TARGETS_RANGE "${COMPIZ_UNINSTALL_CODE_TARGETS_LEN} - 1")
+
+	    foreach (ITER RANGE ${COMPIZ_UNINSTALL_CODE_TARGETS_RANGE})
+
+		list (GET COMPIZ_UNINSTALL_CODE_TARGETS ${ITER} CODE_TARGET)
+		list (GET COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS ${ITER} WORKING_DIRECTORY_TARGET)
+
+		file (APPEND ${_file} "message (STATUS \"Executing custom uninstall script ${CODE_TARGET}\")\n")
+		file (APPEND ${_file} "execute_process (COMMAND ${CODE_TARGET}\n")
+		file (APPEND ${_file} "                 WORKING_DIRECTORY \"${WORKING_DIRECTORY_TARGET}\"\n")
+		file (APPEND ${_file} "                 OUTPUT_VARIABLE cmd_output\n")
+		file (APPEND ${_file} "                 RESULT_VARIABLE cmd_ret)\n")
+		file (APPEND ${_file} "message (\"\${cmd_output}\")\n")
+		file (APPEND ${_file} "if (NOT \"\${cmd_ret}\" STREQUAL 0)\n")
+		file (APPEND ${_file} "    message (FATAL_ERROR \"Problem executing uninstall script ${CODE_TARGET} : \${cmd_ret}\")\n")
+		file (APPEND ${_file} "endif (NOT \"\${cmd_ret}\" STREQUAL 0)\n")
+
+	    endforeach ()
+
+	endif (COMPIZ_UNINSTALL_CODE_TARGETS_SET AND
+	       COMPIZ_UNINSTALL_WORKING_DIRECTORY_TARGETS_SET)
+
+	# Get the code that we need to uninstall, and write it out to the file
+
+	file (APPEND ${_file} "if (NOT EXISTS \"${CMAKE_BINARY_DIR}/install_manifest.txt\")\n")
 	file (APPEND ${_file} "  message (FATAL_ERROR \"Cannot find install manifest: \\\"${CMAKE_BINARY_DIR}/install_manifest.txt\\\"\")\n")
 	file (APPEND ${_file} "endif (NOT EXISTS \"${CMAKE_BINARY_DIR}/install_manifest.txt\")\n\n")
 	file (APPEND ${_file} "file (READ \"${CMAKE_BINARY_DIR}/install_manifest.txt\" files)\n")

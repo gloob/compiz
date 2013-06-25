@@ -29,8 +29,8 @@
 #include <core/abiversion.h>
 #include <core/propertywriter.h>
 
-const unsigned short ICON_SIZE = 48;
-const unsigned int MAX_ICON_SIZE = 256;
+const unsigned short ICON_SIZE     = 512;
+const unsigned short MAX_ICON_SIZE = 512;
 
 bool openGLAvailable;
 
@@ -212,7 +212,7 @@ BaseSwitchWindow::isSwitchWin (bool removing)
     {
 	if (!window->mapNum () || !window->isViewable ())
 	{
-	    CompWindow::Geometry &sg = window->serverGeometry ();
+	    const CompWindow::Geometry &sg = window->serverGeometry ();
 	    if (sg.x () + sg.width ()  <= 0    ||
 		sg.y () + sg.height () <= 0    ||
 		sg.x () >= (int) ::screen->width () ||
@@ -414,7 +414,7 @@ BaseSwitchWindow::paintThumb (const GLWindowPaintAttrib &attrib,
     int                  wx, wy;
     float                width, height;
     GLTexture            *icon = NULL;
-    CompWindow::Geometry &g = window->geometry ();
+    const CompWindow::Geometry &g = window->geometry ();
 
     mask |= PAINT_WINDOW_TRANSFORMED_MASK;
 
@@ -715,20 +715,21 @@ CompizToolboxScreen::CompizToolboxScreen (CompScreen *screen) :
 bool
 CompizToolboxPluginVTable::init ()
 {
-    openGLAvailable = true;
-
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
-
-    if (!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+    if (CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) &&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	openGLAvailable = true;
+    else
 	openGLAvailable = false;
 
-    CompPrivate p;
-    p.uval = COMPIZ_COMPIZTOOLBOX_ABI;
-    screen->storeValue ("compiztoolbox_ABI", p);
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+    {
+	CompPrivate p;
+	p.uval = COMPIZ_COMPIZTOOLBOX_ABI;
+	screen->storeValue ("compiztoolbox_ABI", p);
+	return true;
+    }
 
-    return true;
+    return false;
 }
 
 void

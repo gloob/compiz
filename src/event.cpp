@@ -41,8 +41,10 @@
 #include "privatescreen.h"
 #include "privatewindow.h"
 #include "privatestackdebugger.h"
+#include "eventmanagement.h"
 
 namespace cps = compiz::private_screen;
+namespace ce = compiz::events;
 
 namespace
 {
@@ -107,6 +109,9 @@ isCallBackBinding (CompOption	           &option,
 	return false;
 
     if (!(option.value ().action ().state () & state))
+	return false;
+
+    if (!option.value ().action ().active ())
 	return false;
 
     return true;
@@ -189,78 +194,160 @@ cps::EventManager::triggerRelease (CompAction         *action,
     return false;
 }
 
+int
+ce::processButtonPressOnEdgeWindow (Window               edgeWindow,
+				    Window               root,
+				    Window               eventWindow,
+				    Window               eventRoot,
+				    cps::GrabList        &grabList,
+				    const CompScreenEdge *screenEdge)
+{
+    int edge = -1;
+
+    if (eventRoot != root)
+	return edge;
+
+    if (eventWindow != edgeWindow)
+    {
+	if (grabList.grabsEmpty () ||
+	    eventRoot != root)
+	    return edge;
+    }
+
+    for (unsigned int i = 0; i < SCREEN_EDGE_NUM; i++)
+    {
+	if (edgeWindow == screenEdge[i].id)
+	{
+	    edge = 1 << i;
+	    break;
+	}
+    }
+
+    return edge;
+}
+
+void
+ce::setEventWindowInButtonPressArguments (ce::EventArguments &arguments,
+					  Window             eventWindow)
+{
+    arguments[1].value ().set ((int) eventWindow);
+}
+
+namespace
+{
+    bool buttonActionModifiersMatchEventState (unsigned int actionModifiers,
+					       unsigned int eventState)
+    {
+	const unsigned int ignored = modHandler->ignoredModMask ();
+	const unsigned int modMask = REAL_MOD_MASK & ~ignored;
+	const unsigned int bindMods = modHandler->virtualToRealModMask (actionModifiers);
+
+	return (bindMods & modMask) == (eventState & modMask);
+    }
+}
+
+bool
+ce::activateButtonPressOnWindowBindingOption (CompOption                            &option,
+					      unsigned int                          eventButton,
+					      unsigned int                          eventState,
+					      cps::EventManager                     &eventManager,
+					      const ActionModsMatchesEventStateFunc &matchEventState,
+					      ce::EventArguments                    &arguments)
+{
+    CompAction              *action;
+    const CompAction::State state = CompAction::StateInitButton;
+
+    if (isBound (option, CompAction::BindingTypeButton, state, &action))
+    {
+	if (action->button ().button () == (int) eventButton)
+	{
+	    if (matchEventState (action->button ().modifiers (),
+				 eventState))
+	    {
+		if (eventManager.triggerPress (action, state, arguments))
+		    return true;
+	    }
+	}
+    }
+
+    return false;
+}
+
+bool
+ce::activateButtonPressOnEdgeBindingOption (CompOption                            &option,
+					    unsigned int                          eventButton,
+					    unsigned int                          eventState,
+					    int                                   edge,
+					    cps::EventManager                     &eventManager,
+					    const ActionModsMatchesEventStateFunc &matchEventState,
+					    ce::EventArguments                    &arguments)
+{
+    CompAction              *action;
+    const CompAction::State state = CompAction::StateInitButton |
+				    CompAction::StateInitEdge;
+
+    if (edge != -1)
+    {
+	if (isInitiateBinding (option, CompAction::BindingTypeEdgeButton,
+			       state, &action))
+	{
+	    if ((action->button ().button () == (int) eventButton) &&
+		(action->edgeMask () & edge))
+	    {
+		if (matchEventState (action->button ().modifiers (),
+				     eventState))
+		    if (action->initiate () (action, state,
+					     arguments))
+			return true;
+	    }
+	}
+    }
+
+    return false;
+}
+
 bool
 PrivateScreen::triggerButtonPressBindings (CompOption::Vector &options,
 					   XButtonEvent       *event,
 					   CompOption::Vector &arguments)
 {
-    CompAction::State state = CompAction::StateInitButton;
-    CompAction        *action;
-    unsigned int      ignored = modHandler->ignoredModMask ();
-    unsigned int      modMask = REAL_MOD_MASK & ~ignored;
-    unsigned int      bindMods;
-    unsigned int      edge = 0;
+    int               edge = -1;
+
+    static const ce::ActionModsMatchesEventStateFunc matchEventState (
+		boost::bind (buttonActionModifiersMatchEventState,
+			     _1, _2));
 
     if (edgeWindow)
-    {
-	unsigned int i;
+	edge = ce::processButtonPressOnEdgeWindow (edgeWindow,
+						   screen->root (),
+						   event->window,
+						   event->root,
+						   eventManager,
+						   screenEdge);
 
-	if (event->root != screen->root())
-	    return false;
-
-	if (event->window != edgeWindow)
-	{
-	    if (eventManager.grabsEmpty () || event->window != screen->root())
-		return false;
-	}
-
-	for (i = 0; i < SCREEN_EDGE_NUM; i++)
-	{
-	    if (edgeWindow == screenEdge[i].id)
-	    {
-		edge = 1 << i;
-		arguments[1].value ().set ((int) orphanData.activeWindow);
-		break;
-	    }
-	}
-    }
+    if (edge != -1)
+	ce::setEventWindowInButtonPressArguments (arguments,
+						  orphanData.activeWindow);
 
     foreach (CompOption &option, options)
     {
-	if (isBound (option, CompAction::BindingTypeButton, state, &action))
-	{
-	    if (action->button ().button () == (int) event->button)
-	    {
-		bindMods = modHandler->virtualToRealModMask (
-		    action->button ().modifiers ());
+	if (ce::activateButtonPressOnWindowBindingOption (option,
+							  event->button,
+							  event->state,
+							  eventManager,
+							  matchEventState,
+							  arguments))
+	    return true;
 
-		if ((bindMods & modMask) == (event->state & modMask))
-		{
-		    if (eventManager.triggerPress (action, state, arguments))
-			return true;
-		}
-	    }
-	}
+	if (ce::activateButtonPressOnEdgeBindingOption (option,
+							event->button,
+							event->state,
+							edge,
+							eventManager,
+							matchEventState,
+							arguments))
+	    return true;
 
-	if (edge)
-	{
-	    if (isInitiateBinding (option, CompAction::BindingTypeEdgeButton,
-				   state | CompAction::StateInitEdge, &action))
-	    {
-		if ((action->button ().button () == (int) event->button) &&
-		    (action->edgeMask () & edge))
-		{
-		    bindMods = modHandler->virtualToRealModMask (
-			action->button ().modifiers ());
-
-		    if ((bindMods & modMask) == (event->state & modMask))
-			if (action->initiate () (action, state |
-						 CompAction::StateInitEdge,
-						 arguments))
-			    return true;
-		}
-	    }
-	}
     }
 
     return false;
@@ -885,9 +972,7 @@ PrivateScreen::handleActionEvent (XEvent *event)
 		w = screen->findWindow (event->xclient.window);
 		if (w)
 		{
-		    unsigned int i;
-
-		    for (i = 0; i < SCREEN_EDGE_NUM; i++)
+		    for (unsigned int i = 0; i < SCREEN_EDGE_NUM; i++)
 		    {
 			if (event->xclient.window == screenEdge[i].id)
 			{
@@ -929,9 +1014,7 @@ PrivateScreen::handleActionEvent (XEvent *event)
 		w = screen->findWindow (event->xclient.window);
 		if (w)
 		{
-		    unsigned int i;
-
-		    for (i = 0; i < SCREEN_EDGE_NUM; i++)
+		    for (unsigned int i = 0; i < SCREEN_EDGE_NUM; i++)
 		    {
 			if (xdndWindow == screenEdge[i].id)
 			{
@@ -1202,8 +1285,20 @@ CompScreenImpl::_handleEvent (XEvent *event)
 	 * the window to the window list as we might get configure requests
 	 * which require us to stack other windows relative to it. Setting
 	 * some default values if this is the case. */
-	if (!XGetWindowAttributes (privateScreen.dpy, event->xcreatewindow.window, &wa))
+	if (!XGetWindowAttributes (privateScreen.dpy, event->xcreatewindow.window, &wa)) {
 	    privateScreen.setDefaultWindowAttributes (&wa);
+
+	    /* That being said, we should store as much information as possible
+	     * about it. There may be requests relative to this window that could
+	     * use the data in the XCreateWindowEvent structure, especially the
+	     * override redirect state */
+	    wa.x = event->xcreatewindow.x;
+	    wa.y = event->xcreatewindow.y;
+	    wa.width = event->xcreatewindow.width;
+	    wa.height = event->xcreatewindow.height;
+	    wa.border_width = event->xcreatewindow.border_width;
+	    wa.override_redirect = event->xcreatewindow.override_redirect;
+	}
 
 	foreach (CompWindow *w, screen->windows ())
 	{
@@ -1381,10 +1476,19 @@ CompScreenImpl::_handleEvent (XEvent *event)
 		 * the window to the window list as we might get configure requests
 		 * which require us to stack other windows relative to it. Setting
 		 * some default values if this is the case. */
-		if (!XGetWindowAttributes (privateScreen.dpy, event->xcreatewindow.window, &wa))
+		if (!XGetWindowAttributes (privateScreen.dpy, event->xcreatewindow.window, &wa)) {
 		    privateScreen.setDefaultWindowAttributes (&wa);
 
-		PrivateWindow::createCompWindow (getTopWindow ()->id (), getTopServerWindow ()->id (), wa, event->xcreatewindow.window);
+		    /* That being said, we should store as much information as possible
+		     * about it. There may be requests relative to this window that could
+		     * use the data in the XCreateWindowEvent structure, especially the
+		     * override redirect state */
+		    wa.x = event->xreparent.x;
+		    wa.y = event->xreparent.y;
+		    wa.override_redirect = event->xreparent.override_redirect;
+		}
+
+		PrivateWindow::createCompWindow (getTopWindow ()->id (), getTopServerWindow ()->id (), wa, event->xreparent.window);
 		break;
 	    }
 	    else
@@ -1609,11 +1713,10 @@ CompScreenImpl::_handleEvent (XEvent *event)
 	    if (w)
 	    {
 		unsigned long wState, state;
-		int	      i;
 
 		wState = w->state ();
 
-		for (i = 1; i < 3; i++)
+		for (int i = 1; i < 3; i++)
 		{
 		    state = cps::windowStateMask (event->xclient.data.l[i]);
 		    if (state & ~CompWindowStateHiddenMask)
@@ -1846,7 +1949,7 @@ static const unsigned short _NET_WM_STATE_TOGGLE = 2;
 
 	    /* We should check the override_redirect flag here, because the
 	       client might have changed it while being unmapped. */
-	    if (XGetWindowAttributes (privateScreen.dpy, w->id (), &attr))
+	    if (w->queryAttributes (attr))
 		w->priv->setOverrideRedirect (attr.override_redirect != 0);
 
 	    if (w->state () & CompWindowStateHiddenMask)
@@ -2014,8 +2117,13 @@ static const unsigned short _NET_WM_STATE_TOGGLE = 2;
 
 				    if (fsw->type () & CompWindowTypeFullscreenMask)
 				    {
+					ServerLock lock (screen->serverGrabInterface ());
+
 					/* This will be the window that we must lower relative to */
-					CompWindow *sibling = PrivateWindow::findValidStackSiblingBelow (active, fsw);
+					CompWindow *sibling =
+						PrivateWindow::findValidStackSiblingBelow (active,
+											   fsw,
+											   lock);
 
 					if (sibling)
 					{
@@ -2092,7 +2200,12 @@ static const unsigned short _NET_WM_STATE_TOGGLE = 2;
 		 */
 		if (w)
 		{
-		    if (PrivateWindow::stackDocks (w, dockWindows, &xwc, &mask))
+		    ServerLock lock (screen->serverGrabInterface ());
+		    if (PrivateWindow::stackDocks (w,
+						   dockWindows,
+						   &xwc,
+						   &mask,
+						   lock))
 		    {
 			Window sibling = xwc.sibling;
 			xwc.stack_mode = Above;
@@ -2101,7 +2214,7 @@ static const unsigned short _NET_WM_STATE_TOGGLE = 2;
 			foreach (CompWindow *dw, dockWindows)
 			{
 			    xwc.sibling = sibling;
-			    dw->configureXWindow (mask, &xwc);
+			    dw->restackAndConfigureXWindow (mask, &xwc, lock);
 			}
 		    }
 		}

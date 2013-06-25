@@ -1,7 +1,7 @@
 /*
  * Animation plugin for compiz/beryl
  *
- * animation.c
+ * glide.cpp
  *
  * Copyright : (C) 2006 Erkin Bahceci
  * E-mail    : erkinbah@gmail.com
@@ -45,7 +45,8 @@ GlideAnim::GlideAnim (CompWindow *w,
 		      const CompRect &icon) :
     Animation::Animation (w, curWindowEvent, duration, info, icon),
     TransformAnim::TransformAnim (w, curWindowEvent, duration, info, icon),
-    ZoomAnim::ZoomAnim (w, curWindowEvent, duration, info, icon)
+    ZoomAnim::ZoomAnim (w, curWindowEvent, duration, info, icon),
+    glideModRotAngle (0.0f)
 {
 }
 
@@ -108,6 +109,7 @@ GlideAnim::applyTransform ()
     getParams (&finalDistFac, &finalRotAng, &thickness);
 
     float forwardProgress;
+
     if (zoomToIcon ())
 	getZoomProgress (&forwardProgress, 0, true);
     else
@@ -189,4 +191,3 @@ Glide2Anim::zoomToIcon ()
 	     mCurWindowEvent == WindowEventUnminimize) &&
 	    optValB (AnimationOptions::Glide2ZoomToTaskbar));
 }
-

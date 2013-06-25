@@ -16,6 +16,10 @@ set (LIBCOMPIZCONFIG_FILES
     lists.c
     main.c
     log.c
+    ccs_config_file.c
+    ccs_config_file_interface.c
+    ccs_backend_loader.c
+    ccs_backend_loader_interface.c
 )
 
 add_definitions (
@@ -51,6 +55,21 @@ if (HAVE_INOTIFY)
 endif (HAVE_INOTIFY)
 
 add_library (
+    ccs_text_file_interface STATIC
+    ccs_text_file_interface.c
+)
+
+add_library (
+    ccs_text_file STATIC
+    ccs_text_file.c
+)
+
+target_link_libraries (
+    ccs_text_file
+    ccs_text_file_interface
+)
+
+add_library (
     ccs_settings_upgrade_internal STATIC
     ccs_settings_upgrade_internal.c
 )
@@ -73,8 +92,10 @@ target_link_libraries (
     compizconfig
     ${LIBCOMPIZCONFIG_LIBRARIES}
     m
+    pthread
     dl
     ccs_settings_upgrade_internal
+    ccs_text_file
 )
 
 #

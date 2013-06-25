@@ -27,6 +27,10 @@
 
 #include "privates.h"
 
+template class WrapableInterface<GLWindow, GLWindowInterface>;
+
+template class PluginClassHandler<GLWindow, CompWindow, COMPIZ_OPENGL_ABI>;
+
 GLWindow::GLWindow (CompWindow *w) :
     PluginClassHandler<GLWindow, CompWindow, COMPIZ_OPENGL_ABI> (w),
     priv (new PrivateGLWindow (w, this))
@@ -82,7 +86,8 @@ PrivateGLWindow::PrivateGLWindow (CompWindow *w,
     bindFailed (false),
     vertexBuffer (new GLVertexBuffer ()),
     autoProgram(new GLWindowAutoProgram(this)),
-    icons ()
+    icons (),
+    configureLock (w->obtainLockOnConfigureRequests ())
 {
     paint.xScale	= 1.0f;
     paint.yScale	= 1.0f;
@@ -174,8 +179,24 @@ GLWindow::bind ()
 	}
 	else
 	{
+	    bool immediatelyUpdateMatricesAndRegions =
+		priv->textures.size () != textures.size ();
+
 	    priv->textures = textures;
 	    priv->needsRebind = false;
+
+	    /* If the number of textures changed, we should immediately
+	     * update the matrices and regions so that they are at least
+	     * initialized, but we'll queue another update just before
+	     * glPaint too in case the window moved or changed size */
+	    if (immediatelyUpdateMatricesAndRegions)
+	    {
+		priv->setWindowMatrix ();
+		priv->updateWindowRegions ();
+
+		priv->updateState |= PrivateGLWindow::UpdateMatrix |
+				     PrivateGLWindow::UpdateRegion;
+	    }
 	}
     }
 

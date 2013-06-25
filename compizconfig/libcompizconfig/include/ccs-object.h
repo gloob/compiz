@@ -24,12 +24,12 @@
 #define _CCS_OBJECT_H
 
 #include <ccs-defs.h>
+#include <ccs-fwd.h>
 
 COMPIZCONFIG_BEGIN_DECLS
 
 typedef struct _CCSInterface CCSInterface; /* Dummy typedef */
 typedef struct _CCSPrivate CCSPrivate; /* Dummy typedef */
-typedef struct _CCSObject CCSObject;
 
 typedef void * (*reallocObjectProc) (void *, void *, size_t);
 typedef void * (*mallocObjectProc) (void *, size_t);
@@ -50,14 +50,14 @@ typedef void (*freeObjectProc) (void *, void *);
  * use this interface as a means to allocate their own data so
  * that tests for those objects can test allocation failures
  */
-typedef struct _CCSObjectAllocationInterface
+struct _CCSObjectAllocationInterface
 {
     reallocObjectProc realloc_;
     mallocObjectProc  malloc_;
     callocObjectProc  calloc_;
     freeObjectProc    free_;
     void              *allocator;
-} CCSObjectAllocationInterface;
+};
 
 extern CCSObjectAllocationInterface ccsDefaultObjectAllocator;
 
@@ -147,12 +147,12 @@ const CCSInterface * ccsObjectGetInterface_ (CCSObject *object, int interface_ty
 #define ccsObjectGetInterface(o, interface_type) (ccsObjectGetInterface_) (&(o)->object, interface_type)
 
 #define ccsObjectRef(o) \
-    do { ((o)->object).refcnt++; } while (FALSE)
+    do { ++((o)->object).refcnt; } while (FALSE)
 
 #define ccsObjectUnref(o, freeFunc) \
     do \
     { \
-	((o)->object).refcnt--; \
+	--((o)->object).refcnt; \
 	if (!((o)->object).refcnt) \
 	    freeFunc (o); \
     } while (FALSE)

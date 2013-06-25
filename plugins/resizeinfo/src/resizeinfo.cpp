@@ -2,7 +2,7 @@
  *
  * Compiz metacity like info during resize
  *
- * resizeinfo.c
+ * resizeinfo.cpp
  *
  * Copyright (c) 2007 Robert Carr <racarr@opencompositing.org>
  *
@@ -25,8 +25,8 @@
 
 COMPIZ_PLUGIN_20090315 (resizeinfo, InfoPluginVTable);
 
-const unsigned short RESIZE_POPUP_WIDTH = 85;
-const unsigned short RESIZE_POPUP_HEIGHT = 50;
+const unsigned short RESIZE_POPUP_WIDTH = 100;
+const unsigned short RESIZE_POPUP_HEIGHT = 33;
 
 const double PI = 3.14159265359f;
 
@@ -57,16 +57,17 @@ InfoLayer::InfoLayer () :
 	return;
 
     pixmap = XCreatePixmap (screen->dpy (), screen->root (),
-			    RESIZE_POPUP_WIDTH, RESIZE_POPUP_HEIGHT, 32);
+			    RESIZE_POPUP_WIDTH,
+			    RESIZE_POPUP_HEIGHT, 32);
     if (!pixmap)
 	return;
 
-    surface =
-	cairo_xlib_surface_create_with_xrender_format (screen->dpy (),
-						       pixmap, s,
-						       format,
-						       RESIZE_POPUP_WIDTH,
-						       RESIZE_POPUP_HEIGHT);
+    surface = cairo_xlib_surface_create_with_xrender_format (screen->dpy (),
+							     pixmap, s,
+							     format,
+							     RESIZE_POPUP_WIDTH,
+							     RESIZE_POPUP_HEIGHT);
+
     if (cairo_surface_status (surface) != CAIRO_STATUS_SUCCESS)
     {
 	compLogMessage ("resizeinfo", CompLogLevelWarn,
@@ -102,9 +103,6 @@ InfoLayer::InfoLayer () :
 void
 InfoLayer::renderText ()
 {
-    unsigned int         baseWidth, baseHeight;
-    unsigned int         widthInc, heightInc;
-    unsigned int         width, height, xv, yv;
     unsigned short       *color;
     char                 info[50];
     PangoLayout          *layout;
@@ -116,17 +114,17 @@ InfoLayer::renderText ()
     if (!valid)
 	return;
 
-    baseWidth = is->pWindow->sizeHints ().base_width;
-    baseHeight = is->pWindow->sizeHints ().base_height;
-    widthInc = is->pWindow->sizeHints ().width_inc;
-    heightInc = is->pWindow->sizeHints ().height_inc;
-    width = is->resizeGeometry.width;
-    height = is->resizeGeometry.height;
-	
+    unsigned int baseWidth  = is->pWindow->sizeHints ().base_width;
+    unsigned int baseHeight = is->pWindow->sizeHints ().base_height;
+    unsigned int widthInc   = is->pWindow->sizeHints ().width_inc;
+    unsigned int heightInc  = is->pWindow->sizeHints ().height_inc;
+    unsigned int width      = is->resizeGeometry.width;
+    unsigned int height     = is->resizeGeometry.height;
+
     color = is->optionGetTextColor ();
 
-    xv = (widthInc > 1) ? (width - baseWidth) / widthInc : width;
-    yv = (heightInc > 1) ? (height - baseHeight) / heightInc : height;
+    unsigned int xv = (widthInc > 1) ? (width - baseWidth) / widthInc : width;
+    unsigned int yv = (heightInc > 1) ? (height - baseHeight) / heightInc : height;
 
     /* Clear the context. */
     cairo_save (cr);
@@ -135,16 +133,22 @@ InfoLayer::renderText ()
     cairo_restore (cr);
     cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
 
-    snprintf (info, 50, "%d x %d", xv, yv);
+    snprintf (info, 50, "%u x %u", xv, yv);
 
     font = pango_font_description_new ();
     layout = pango_cairo_create_layout (is->textLayer.cr);
   
     pango_font_description_set_family (font,"Sans");
-    pango_font_description_set_absolute_size (font, 12 * PANGO_SCALE);
+    pango_font_description_set_absolute_size (font,
+					      is->optionGetResizeinfoFontSize () *
+					      PANGO_SCALE);
     pango_font_description_set_style (font, PANGO_STYLE_NORMAL);
-    pango_font_description_set_weight (font, PANGO_WEIGHT_BOLD);
- 
+
+    if (is->optionGetResizeinfoFontBold ())
+	pango_font_description_set_weight (font, PANGO_WEIGHT_BOLD);
+    else
+	pango_font_description_set_weight (font, PANGO_WEIGHT_NORMAL);
+
     pango_layout_set_font_description (layout, font);
     pango_layout_set_ellipsize (layout, PANGO_ELLIPSIZE_END);
     pango_layout_set_text (layout, info, -1);
@@ -152,7 +156,7 @@ InfoLayer::renderText ()
     pango_layout_get_pixel_size (layout, &w, &h);
   
     cairo_move_to (cr, 
-		   RESIZE_POPUP_WIDTH / 2.0f - w / 2.0f, 
+		   RESIZE_POPUP_WIDTH / 2.0f - w / 2.0f,
 		   RESIZE_POPUP_HEIGHT / 2.0f - h / 2.0f);
   
     pango_layout_set_width (layout, RESIZE_POPUP_WIDTH * PANGO_SCALE);
@@ -178,8 +182,6 @@ InfoLayer::renderBackground ()
 {
     cairo_pattern_t *pattern;	
     float           border = 7.5;
-    int             height = RESIZE_POPUP_HEIGHT;
-    int             width = RESIZE_POPUP_WIDTH;
     float           r, g, b, a;
 
     INFO_SCREEN (screen);
@@ -197,7 +199,9 @@ InfoLayer::renderBackground ()
     cairo_set_operator (cr, CAIRO_OPERATOR_OVER);
 
     /* Setup Gradient */
-    pattern = cairo_pattern_create_linear (0, 0, width, height);
+    pattern = cairo_pattern_create_linear (0, 0,
+					   RESIZE_POPUP_WIDTH,
+					   RESIZE_POPUP_HEIGHT);
 
     r = is->optionGetGradient1Red () / (float)0xffff;
     g = is->optionGetGradient1Green () / (float)0xffff;
@@ -205,38 +209,46 @@ InfoLayer::renderBackground ()
     a = is->optionGetGradient1Alpha () / (float)0xffff;
     cairo_pattern_add_color_stop_rgba (pattern, 0.00f, r, g, b, a);
 
-    r = is->optionGetGradient1Red () / (float)0xffff;
-    g = is->optionGetGradient1Green () / (float)0xffff;
-    b = is->optionGetGradient1Blue () / (float)0xffff;
-    a = is->optionGetGradient1Alpha () / (float)0xffff;
+    r = is->optionGetGradient2Red () / (float)0xffff;
+    g = is->optionGetGradient2Green () / (float)0xffff;
+    b = is->optionGetGradient2Blue () / (float)0xffff;
+    a = is->optionGetGradient2Alpha () / (float)0xffff;
     cairo_pattern_add_color_stop_rgba (pattern, 0.65f, r, g, b, a);
 
-    r = is->optionGetGradient1Red () / (float)0xffff;
-    g = is->optionGetGradient1Green () / (float)0xffff;
-    b = is->optionGetGradient1Blue () / (float)0xffff;
-    a = is->optionGetGradient1Alpha () / (float)0xffff;
+    r = is->optionGetGradient3Red () / (float)0xffff;
+    g = is->optionGetGradient3Green () / (float)0xffff;
+    b = is->optionGetGradient3Blue () / (float)0xffff;
+    a = is->optionGetGradient3Alpha () / (float)0xffff;
     cairo_pattern_add_color_stop_rgba (pattern, 0.85f, r, g, b, a);
     cairo_set_source (cr, pattern);
 	
     /* Rounded Rectangle! */
     cairo_arc (cr, border, border, border, PI, 1.5f * PI);
-    cairo_arc (cr, border + width - 2 * border, border, border,
+    cairo_arc (cr, border + RESIZE_POPUP_WIDTH - 2 * border,
+	       border, border,
 	       1.5f * PI, 2.0 * PI);
-    cairo_arc (cr, width - border, height - border, border, 0, PI / 2.0f);
-    cairo_arc (cr, border, height - border, border,  PI / 2.0f, PI);
+    cairo_arc (cr, RESIZE_POPUP_WIDTH - border,
+	       RESIZE_POPUP_HEIGHT - border,
+	       border, 0, PI / 2.0f);
+    cairo_arc (cr, border, RESIZE_POPUP_HEIGHT - border,
+	       border,  PI / 2.0f, PI);
     cairo_close_path (cr);
     cairo_fill_preserve (cr);
 	
     /* Outline */
-    cairo_set_source_rgba (cr, 0.9f, 0.9f, 0.9f, 1.0f);
+    r = is->optionGetOutlineColorRed () / (float)0xffff;
+    g = is->optionGetOutlineColorGreen () / (float)0xffff;
+    b = is->optionGetOutlineColorBlue () / (float)0xffff;
+    a = is->optionGetOutlineColorAlpha () / (float)0xffff;
+    cairo_set_source_rgba (cr, r, g, b, a);
     cairo_stroke (cr);
 	
     cairo_pattern_destroy (pattern);
 }
 
 static void
-gradientChanged (CompOption                 *o, 
-		 ResizeinfoOptions::Options num)
+backgroundColorChanged (CompOption                 *o, 
+			ResizeinfoOptions::Options num)
 {
     INFO_SCREEN (screen);
 
@@ -246,19 +258,17 @@ gradientChanged (CompOption                 *o,
 void
 InfoScreen::damagePaintRegion ()
 {
-    int    x, y;
-
     if (!fadeTime && !drawing)
 	return;
 
-    x = resizeGeometry.x + resizeGeometry.width / 2.0f -
-	RESIZE_POPUP_WIDTH / 2.0f;
-    y = resizeGeometry.y + resizeGeometry.height / 2.0f - 
-	RESIZE_POPUP_HEIGHT / 2.0f;
+    int x = resizeGeometry.x + resizeGeometry.width / 2.0f -
+	    RESIZE_POPUP_WIDTH / 2.0f;
+    int y = resizeGeometry.y + resizeGeometry.height / 2.0f -
+	    RESIZE_POPUP_HEIGHT / 2.0f;
 
     CompRegion reg (x - 5, y - 5,
-		    (x + RESIZE_POPUP_WIDTH + 5),
-		    (y + RESIZE_POPUP_HEIGHT + 5));
+		    (RESIZE_POPUP_WIDTH + 5),
+		    (RESIZE_POPUP_HEIGHT + 5));
 
     cScreen->damageRegion (reg);
 }
@@ -308,12 +318,11 @@ InfoWindow::grabNotify (int          x,
     INFO_SCREEN (screen);
 
     if ((!is->pWindow || !is->drawing) &&
-        ((window->state () & MAXIMIZE_STATE) != MAXIMIZE_STATE))
+	((window->state () & MAXIMIZE_STATE) != MAXIMIZE_STATE))
     {
-	bool showInfo;
-	showInfo = (((window->sizeHints ().width_inc != 1) && 
-		     (window->sizeHints ().height_inc != 1)) ||
-		    is->optionGetAlwaysShow ());
+	bool showInfo = (((window->sizeHints ().width_inc != 1) &&
+			 (window->sizeHints ().height_inc != 1)) ||
+			 is->optionGetAlwaysShow ());
 
 	if (showInfo && (mask & CompWindowGrabResizeMask))
 	{
@@ -329,7 +338,7 @@ InfoWindow::grabNotify (int          x,
 	    screen->handleEventSetEnabled (is, true);
 	}
     }
-	
+
     window->grabNotify (x, y, state, mask);
 }
 
@@ -355,8 +364,8 @@ InfoWindow::ungrabNotify ()
    RESIZE_POPUP_HEIGHT with the opacity in InfoScreen. */
 void
 InfoLayer::draw (const GLMatrix &transform,
-                 int             x,
-	   	 int y)
+		 int             x,
+		 int             y)
 {
     BOX   box;
     float opacity;
@@ -371,9 +380,9 @@ InfoLayer::draw (const GLMatrix &transform,
 	GLushort           colorData[4];
 	GLfloat            textureData[8];
 	GLfloat            vertexData[12];
-	GLTexture         *tex = texture[i];
-	GLTexture::Matrix matrix = tex->matrix ();
-	GLVertexBuffer *streamingBuffer = GLVertexBuffer::streamingBuffer ();
+	GLTexture          *tex = texture[i];
+	GLTexture::Matrix  matrix = tex->matrix ();
+	GLVertexBuffer     *streamingBuffer = GLVertexBuffer::streamingBuffer ();
 
 	tex->enable (GLTexture::Good);
 
@@ -436,19 +445,16 @@ InfoScreen::glPaintOutput (const GLScreenPaintAttrib &attrib,
 			   CompOutput                *output,
 			   unsigned int              mask)
 {
-    bool status;
-  
-    status = gScreen->glPaintOutput (attrib, transform, region, output, mask);
+    bool status = gScreen->glPaintOutput (attrib, transform, region, output, mask);
 
     if ((drawing || fadeTime) && pWindow)
     {
 	GLMatrix sTransform = transform;
-	int      x, y;
 
-	x = resizeGeometry.x + resizeGeometry.width / 2.0f - 
-	    RESIZE_POPUP_WIDTH / 2.0f;
-	y = resizeGeometry.y + resizeGeometry.height / 2.0f - 
-	    RESIZE_POPUP_HEIGHT / 2.0f;
+	int x = resizeGeometry.x + resizeGeometry.width / 2.0f -
+		RESIZE_POPUP_WIDTH / 2.0f;
+	int y = resizeGeometry.y + resizeGeometry.height / 2.0f -
+		RESIZE_POPUP_HEIGHT / 2.0f;
 
 	sTransform.toScreenSpace (output, -DEFAULT_Z_CAMERA);
       
@@ -461,7 +467,6 @@ InfoScreen::glPaintOutput (const GLScreenPaintAttrib &attrib,
   
 	gScreen->setTexEnvMode (GL_REPLACE);
 	glDisable (GL_BLEND);
-
     }
 
     return status;
@@ -470,13 +475,15 @@ InfoScreen::glPaintOutput (const GLScreenPaintAttrib &attrib,
 void
 InfoScreen::handleEvent (XEvent *event)
 {
-    switch (event->type) {
-    case ClientMessage:    
+    switch (event->type)
+    {
+    case ClientMessage:
 	if (event->xclient.message_type == resizeInfoAtom)
 	{
 	    CompWindow *w;
 
 	    w = screen->findWindow (event->xclient.window);
+
 	    if (w && w == pWindow)
 	    {
 		resizeGeometry.x      = event->xclient.data.l[0];
@@ -496,6 +503,7 @@ InfoScreen::handleEvent (XEvent *event)
 	    }
 	}
 	break;
+
     default:
 	break;
     }
@@ -527,9 +535,10 @@ InfoScreen::InfoScreen (CompScreen *screen) :
 
     backgroundLayer.renderBackground ();
 
-    optionSetGradient1Notify (gradientChanged);
-    optionSetGradient2Notify (gradientChanged);
-    optionSetGradient3Notify (gradientChanged);
+    optionSetGradient1Notify (backgroundColorChanged);
+    optionSetGradient2Notify (backgroundColorChanged);
+    optionSetGradient3Notify (backgroundColorChanged);
+    optionSetOutlineColorNotify (backgroundColorChanged);
 }
 
 InfoWindow::InfoWindow (CompWindow *window) :
@@ -544,10 +553,10 @@ InfoWindow::InfoWindow (CompWindow *window) :
 bool
 InfoPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-	!CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-	!CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }

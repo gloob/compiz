@@ -93,7 +93,7 @@ registerAllIntegratedOptions (CCSIntegration *integration)
     unsigned int i = 0;
     const CCSGNOMEIntegratedSettingsList *array = ccsGNOMEIntegratedSettingsList ();
 
-    for (; i < CCS_GNOME_INTEGRATED_SETTINGS_LIST_SIZE; i++)
+    for (; i < CCS_GNOME_INTEGRATED_SETTINGS_LIST_SIZE; ++i)
     {
 	CCSIntegratedSetting *setting = ccsIntegratedSettingFactoryCreateIntegratedSettingForCCSSettingNameAndType (priv->factory,
 														    integration,
@@ -120,7 +120,16 @@ ccsGNOMEIntegrationBackendGetIntegratedSetting (CCSIntegration *integration,
 															  settingName);
 
     if (integratedSettings)
-	return integratedSettings->data;
+    {
+	/* At the moment, we only support the first setting out of
+	 * the list. Assert the returned size is one */
+	g_assert (ccsIntegratedSettingListLength (integratedSettings) == 1);
+
+	CCSIntegratedSetting *integratedSetting = integratedSettings->data;
+	ccsIntegratedSettingListFree (integratedSettings, FALSE);
+
+	return integratedSetting;
+    }
 
     return NULL;
 }
@@ -132,9 +141,12 @@ getGnomeMouseButtonModifier (CCSIntegratedSetting *mouseButtonModifierSetting)
     CCSSettingType type = TypeString;
     CCSSettingValue *v = ccsIntegratedSettingReadValue (mouseButtonModifierSetting, type);
 
-    modMask = ccsStringToModifiers (v->value.asString);
+    if (v)
+    {
+	modMask = ccsStringToModifiers (v->value.asString);
 
-    ccsFreeSettingValueWithType (v, type);
+	ccsFreeSettingValueWithType (v, type);
+    }
 
     return modMask;
 }
@@ -157,6 +169,47 @@ getButtonBindingForSetting (CCSContext   *context,
 }
 
 static Bool
+ccsGNOMEIntegrationBackendReadISAndSetSettingForType (CCSIntegratedSetting *integratedSetting,
+						      CCSSetting           *setting,
+						      CCSSettingValue      **v,
+						      CCSSettingType       sourceType,
+						      CCSSettingType       destinationType)
+{
+    *v = ccsIntegratedSettingReadValue (integratedSetting, sourceType);
+
+    if (*v != NULL && (*v)->value.asString)
+    {
+	/* Conversion to key type option necessary */
+	if (destinationType == TypeKey)
+	{
+	    CCSSettingKeyValue key;
+
+	    memset (&key, 0, sizeof (CCSSettingKeyValue));
+	    if (ccsStringToKeyBinding ((*v)->value.asString, &key))
+	    {
+		/* Since we effectively change the type of the value here
+		* we need to free the old string value */
+		free ((*v)->value.asString);
+		ccsSetKey (setting, key, TRUE);
+	        return TRUE;
+	    }
+	    else
+	    {
+		/* We were not successful at converting strings to keybindings
+		 * but we must free the string value anyways as we present
+		 * this value to ccsSettingValueFreeWithType as a TypeKey
+		 * intentionally made empty */
+		free ((*v)->value.asString);
+		return FALSE;
+	    }
+	}
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+static Bool
 ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 						 CCSContext	       *context,
 						 CCSSetting	       *setting,
@@ -171,9 +224,7 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
     if (ccsIntegratedSettingsStorageEmpty (priv->storage))
 	registerAllIntegratedOptions (integration);
 
-    ret = ccsSettingIsReadableByBackend (setting);
-
-    if (!ret)
+    if (!ccsSettingIsReadableByBackend (setting))
 	return FALSE;
 
     switch (ccsGNOMEIntegratedSettingInfoGetSpecialOptionType ((CCSGNOMEIntegratedSettingInfo *) integratedSetting)) {
@@ -181,6 +232,8 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 	{
 	    type = TypeInt;
 	    v = ccsIntegratedSettingReadValue (integratedSetting, type);
+	    if (!v)
+		break;
 	    ccsSetInt (setting, v->value.asInt, TRUE);
 	    ret = TRUE;
 	}
@@ -189,6 +242,8 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 	{
 	    type = TypeBool;
 	    v = ccsIntegratedSettingReadValue (integratedSetting, type);
+	    if (!v)
+		break;
 	    ccsSetBool (setting, v->value.asBool, TRUE);
 	    ret = TRUE;
 	}
@@ -197,6 +252,8 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 	{
 	    type = TypeString;
 	    v = ccsIntegratedSettingReadValue (integratedSetting, type);
+	    if (!v)
+		break;
 	    char *str = v->value.asString;
 
 	    ccsSetString (setting, str, TRUE);
@@ -205,21 +262,15 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 	break;
     case OptionKey:
 	{
+	    /* Some backends store keys differently so we need to let the backend know
+	     * that we really intend to read a key and let it handle the conversion */
 	    type = TypeKey;
-	    v = ccsIntegratedSettingReadValue (integratedSetting, type);
-
-	    if (v->value.asString)
-	    {
-		CCSSettingKeyValue key;
-
-		memset (&key, 0, sizeof (CCSSettingKeyValue));
-		ccsGetKey (setting, &key);
-		if (ccsStringToKeyBinding (v->value.asString, &key))
-		{
-		    ccsSetKey (setting, key, TRUE);
-		    ret = TRUE;
-		}
-	    }
+	    if (ccsGNOMEIntegrationBackendReadISAndSetSettingForType (integratedSetting,
+								      setting,
+								      &v,
+								      TypeKey,
+								      type))
+		ret = TRUE;
 	}
 	break;
     case OptionSpecial:
@@ -232,6 +283,9 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 		type = TypeBool;
 		v = ccsIntegratedSettingReadValue (integratedSetting, type);
 
+		if (!v)
+		    break;
+
 		Bool showAll = v->value.asBool;
 		ccsSetBool (setting, !showAll, TRUE);
 		ret = TRUE;
@@ -240,6 +294,8 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 	    {
 		type = TypeString;
 		v = ccsIntegratedSettingReadValue (integratedSetting, type);
+		if (!v)
+		    break;
 
 		const char *value = v->value.asString;
 		if (value)
@@ -255,6 +311,8 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 	    {
 		type = TypeString;
 		v = ccsIntegratedSettingReadValue (integratedSetting, type);
+		if (!v)
+		    break;
 
 		const char *focusMode = v->value.asString;
 
@@ -264,6 +322,20 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 		    ccsSetBool (setting, clickToFocus, TRUE);
 		    ret = TRUE;
 		}
+	    }
+	    else if ((strcmp (settingName, "run_command_screenshot_key") == 0 ||
+		      strcmp (settingName, "run_command_window_screenshot_key") == 0 ||
+		      strcmp (settingName, "run_command_terminal_key") == 0))
+	    {
+		/* These are always stored as strings, no matter what the backend is
+		 * so the source type should be string */
+		type = TypeKey;
+		if (ccsGNOMEIntegrationBackendReadISAndSetSettingForType (integratedSetting,
+									  setting,
+									  &v,
+									  TypeString,
+									  type))
+		    ret = TRUE;
 	    }
 	    else if (((strcmp (settingName, "initiate_button") == 0) &&
 		      ((strcmp (pluginName, "move") == 0) ||
@@ -277,18 +349,20 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 		memset (&button, 0, sizeof (CCSSettingButtonValue));
 		ccsGetButton (setting, &button);
 
-		CCSIntegratedSettingList integratedSettingsMBM = ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
-														ccsGNOMEIntegratedPluginNames.SPECIAL,
-														ccsGNOMEIntegratedSettingNames.NULL_MOUSE_BUTTON_MODIFIER.compizName);
+		CCSIntegratedSettingList mouseModifierSetting =
+		    ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
+											    ccsGNOMEIntegratedPluginNames.SPECIAL,
+											    ccsGNOMEIntegratedSettingNames.NULL_MOUSE_BUTTON_MODIFIER.compizName);
 
-		button.buttonModMask = getGnomeMouseButtonModifier (integratedSettingsMBM->data);
+		button.buttonModMask = getGnomeMouseButtonModifier (mouseModifierSetting->data);
 
-		CCSIntegratedSettingList integratedSettings = ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
-														ccsGNOMEIntegratedPluginNames.SPECIAL,
-														ccsGNOMEIntegratedSettingNames.NULL_RESIZE_WITH_RIGHT_BUTTON.compizName);
+		CCSIntegratedSettingList resizeButtonSetting =
+		    ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
+											    ccsGNOMEIntegratedPluginNames.SPECIAL,
+											    ccsGNOMEIntegratedSettingNames.NULL_RESIZE_WITH_RIGHT_BUTTON.compizName);
 
 		type = TypeBool;
-		v = ccsIntegratedSettingReadValue (integratedSettings->data, type);
+		v = ccsIntegratedSettingReadValue (resizeButtonSetting->data, type);
 
 		resizeWithRightButton =
 		   v->value.asBool;
@@ -302,6 +376,10 @@ ccsGNOMEIntegrationBackendReadOptionIntoSetting (CCSIntegration *integration,
 
 		ccsSetButton (setting, button, TRUE);
 		ret = TRUE;
+
+		/* Free the returned lists */
+		ccsIntegratedSettingListFree (mouseModifierSetting, FALSE);
+		ccsIntegratedSettingListFree (resizeButtonSetting, FALSE);
 	    }
 
 	}
@@ -350,7 +428,6 @@ setButtonBindingForSetting (CCSContext   *context,
 			    unsigned int buttonModMask)
 {
     CCSSetting            *s;
-    CCSSettingButtonValue value;
 
     s = findDisplaySettingForPlugin (context, plugin, setting);
     if (!s)
@@ -359,7 +436,7 @@ setButtonBindingForSetting (CCSContext   *context,
     if (ccsSettingGetType (s) != TypeButton)
 	return;
 
-    value = ccsSettingGetValue (s)->value.asButton;
+    CCSSettingButtonValue value = ccsSettingGetValue (s)->value.asButton;
 
     if ((value.button != button) || (value.buttonModMask != buttonModMask))
     {
@@ -368,6 +445,29 @@ setButtonBindingForSetting (CCSContext   *context,
 
 	ccsSetButton (s, value, TRUE);
     }
+}
+
+static Bool
+ccsGNOMEIntegrationBackendKeyValueToStringValue (CCSSettingValue *keyValue,
+						 CCSSettingValue *stringValue)
+{
+    char  *newValue;
+
+    newValue = ccsKeyBindingToString (&keyValue->value.asKey);
+    if (newValue)
+    {
+	if (strcmp (newValue, "Disabled") == 0)
+	{
+	    /* Metacity doesn't like "Disabled", it wants "disabled" */
+	    newValue[0] = 'd';
+	}
+
+	stringValue->value.asString = newValue;
+
+	return TRUE;
+    }
+
+    return FALSE;
 }
 
 static void
@@ -390,7 +490,14 @@ ccsGNOMEIntegrationBackendWriteOptionFromSetting (CCSIntegration *integration,
     /* Do not allow recursing back into writeIntegratedSetting */
     ccsIntegrationDisallowIntegratedWrites (integration);
 
-    CCSSettingValue *v = ccsSettingGetValue (setting);
+    CCSSettingType sType = ccsSettingGetType (setting);
+    CCSSettingInfo *sInfo = ccsSettingGetInfo (setting);
+
+    CCSSettingValue *vSetting = ccsSettingGetValue (setting);
+    CCSSettingValue *v = ccsCopyValue (vSetting, sType, sInfo);
+
+    if (!v)
+	return;
 
     switch (ccsGNOMEIntegratedSettingInfoGetSpecialOptionType ((CCSGNOMEIntegratedSettingInfo *) integratedSetting))
     {
@@ -405,25 +512,22 @@ ccsGNOMEIntegrationBackendWriteOptionFromSetting (CCSIntegration *integration,
 	break;
     case OptionKey:
 	{   
-	    char  *newValue;
+	    CCSSettingValue *newValue = calloc (1, sizeof (CCSSettingValue));
 
-	    newValue = ccsKeyBindingToString (&(ccsSettingGetValue (setting)->value.asKey));
-	    if (newValue)
-    	    {
-		if (strcmp (newValue, "Disabled") == 0)
-		{
-		    /* Metacity doesn't like "Disabled", it wants "disabled" */
-		    newValue[0] = 'd';
-		}
+	    newValue->isListChild = FALSE;
+	    newValue->parent = NULL;
+	    newValue->refCount = 1;
 
+	    if (ccsGNOMEIntegrationBackendKeyValueToStringValue (v, newValue))
+	    {
 		/* Really this is a lie - the writer expects a string
 		 * but it needs to know if its a key or a string */
 		type = TypeKey;
-		v->value.asString = newValue;
-
-		ccsIntegratedSettingWriteValue (integratedSetting, v, type);
-		free (newValue);
+		ccsIntegratedSettingWriteValue (integratedSetting, newValue, type);
 	    }
+
+	    if (newValue)
+		ccsFreeSettingValueWithType (newValue, TypeString);
 	}
 	break;
     case OptionSpecial:
@@ -445,7 +549,7 @@ ccsGNOMEIntegrationBackendWriteOptionFromSetting (CCSIntegration *integration,
 	    }
 	    else if (strcmp (settingName, "fullscreen_visual_bell") == 0)
 	    {
-		const char *newValueString = v->value.asString ? "fullscreen" : "frame_flash";
+		const char *newValueString = v->value.asBool ? "fullscreen" : "frame_flash";
 		newValue->value.asString = strdup (newValueString);
 		type = TypeString;
 
@@ -453,11 +557,23 @@ ccsGNOMEIntegrationBackendWriteOptionFromSetting (CCSIntegration *integration,
 	    }
 	    else if (strcmp (settingName, "click_to_focus") == 0)
 	    {
-		const char *newValueString = v->value.asString ? "click" : "sloppy";
+		const char *newValueString = v->value.asBool ? "click" : "sloppy";
 		newValue->value.asString = strdup (newValueString);
 		type = TypeString;
 
 		ccsIntegratedSettingWriteValue (integratedSetting, newValue, type);
+	    }
+	    else if ((strcmp (settingName, "run_command_screenshot_key") == 0 ||
+		      strcmp (settingName, "run_command_window_screenshot_key") == 0 ||
+		      strcmp (settingName, "run_command_terminal_key") == 0))
+	    {
+		if (ccsGNOMEIntegrationBackendKeyValueToStringValue (v, newValue))
+		{
+		    /* These are actually stored as strings in the schemas */
+		    type = TypeString;
+		    ccsIntegratedSettingWriteValue (integratedSetting, newValue, type);
+		}
+
 	    }
 	    else if (((strcmp (settingName, "initiate_button") == 0) &&
 		      ((strcmp (pluginName, "move") == 0) ||
@@ -468,41 +584,47 @@ ccsGNOMEIntegrationBackendWriteOptionFromSetting (CCSIntegration *integration,
 		unsigned int modMask;
 		Bool         resizeWithRightButton = FALSE;
 
-		if ((getButtonBindingForSetting (context, "resize",
+		if ((getButtonBindingForSetting (priv->context, "resize",
 						 "initiate_button") == 3) ||
-		    (getButtonBindingForSetting (context, "core",
+		    (getButtonBindingForSetting (priv->context, "core",
 						 "window_menu_button") == 2))
 		{
 		     resizeWithRightButton = TRUE;
 		}
 
-		CCSIntegratedSettingList integratedSettings = ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
-														ccsGNOMEIntegratedPluginNames.SPECIAL,
-														ccsGNOMEIntegratedSettingNames.NULL_RESIZE_WITH_RIGHT_BUTTON.compizName);
+		CCSIntegratedSettingList resizeButtonSetting =
+		    ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
+											    ccsGNOMEIntegratedPluginNames.SPECIAL,
+											    ccsGNOMEIntegratedSettingNames.NULL_RESIZE_WITH_RIGHT_BUTTON.compizName);
 
 		newValue->value.asBool = resizeWithRightButton;
 		type = TypeBool;
 
-		ccsIntegratedSettingWriteValue (integratedSettings->data, newValue, type);
+		ccsIntegratedSettingWriteValue (resizeButtonSetting->data, newValue, type);
 
-		CCSIntegratedSettingList integratedSettingsMBM = ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
-														ccsGNOMEIntegratedPluginNames.SPECIAL,
-														ccsGNOMEIntegratedSettingNames.NULL_MOUSE_BUTTON_MODIFIER.compizName);
+		CCSIntegratedSettingList mouseModifierSetting =
+		    ccsIntegratedSettingsStorageFindMatchingSettingsByPluginAndSettingName (priv->storage,
+											    ccsGNOMEIntegratedPluginNames.SPECIAL,
+											    ccsGNOMEIntegratedSettingNames.NULL_MOUSE_BUTTON_MODIFIER.compizName);
 
-		modMask = ccsSettingGetValue (setting)->value.asButton.buttonModMask;
-		if (setGnomeMouseButtonModifier (integratedSettingsMBM->data, modMask))
+		modMask = v->value.asButton.buttonModMask;
+		if (setGnomeMouseButtonModifier (mouseModifierSetting->data, modMask))
 		{
-		    setButtonBindingForSetting (context, "move",
+		    setButtonBindingForSetting (priv->context, "move",
 						"initiate_button", 1, modMask);
-		    setButtonBindingForSetting (context, "resize",
+		    setButtonBindingForSetting (priv->context, "resize",
 						"initiate_button", 
 						resizeWithRightButton ? 3 : 2,
 						modMask);
-		    setButtonBindingForSetting (context, "core",
+		    setButtonBindingForSetting (priv->context, "core",
 						"window_menu_button",
 						resizeWithRightButton ? 2 : 3,
 						modMask);
 		}
+
+		/* We own the returned lists, so free them */
+		ccsIntegratedSettingListFree (resizeButtonSetting, FALSE);
+		ccsIntegratedSettingListFree (mouseModifierSetting, FALSE);
 	    }
 
 	    if (newValue)
@@ -516,6 +638,9 @@ ccsGNOMEIntegrationBackendWriteOptionFromSetting (CCSIntegration *integration,
 	ccsError ("%s", err->message);
 	g_error_free (err);
     }
+
+    if (v)
+	ccsFreeSettingValueWithType (v, sType);
 
     /* we should immediately write changed settings */
     ccsWriteChangedSettings (priv->context);
@@ -570,11 +695,11 @@ ccsGNOMEIntegrationBackendUpdateIntegratedSettings (CCSIntegration *integration,
 	else
 	{
 	    CCSPlugin     *plugin = NULL;
-	    CCSSetting    *setting;
 
 	    plugin = ccsFindPlugin (priv->context, pluginName);
 	    if (plugin)
 	    {
+		CCSSetting    *setting;
 		setting = ccsFindSetting (plugin, settingName);
 
 		if (setting)

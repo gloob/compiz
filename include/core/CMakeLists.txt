@@ -1,6 +1,7 @@
 set (_headers
     action.h
     atoms.h
+    configurerequestbuffer.h
     core.h
     countedlist.h
     global.h
@@ -16,6 +17,7 @@ set (_headers
     session.h
     size.h
     string.h
+    templates.h
     window.h
     wrapsystem.h
     abiversion.h

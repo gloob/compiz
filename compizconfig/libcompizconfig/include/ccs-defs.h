@@ -79,14 +79,17 @@ COMPIZCONFIG_BEGIN_DECLS
 #define CCSREF(type,dtype) \
 	void ccs##type##Ref (dtype *d)  \
 	{ \
-	    d->refCount++; \
+	    ++d->refCount; \
 	} \
 	void ccs##type##Unref (dtype *d) \
 	{ \
-	    d->refCount--; \
+	    --d->refCount; \
 	    if (d->refCount == 0) \
 		ccsFree##type (d); \
 	} \
+
+#define GET_PRIVATE(Private, obj) \
+    (Private *) ccsObjectGetPrivate (obj);
 
 COMPIZCONFIG_END_DECLS
 

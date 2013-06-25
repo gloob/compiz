@@ -12,7 +12,7 @@ add_custom_command (OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/compizconfig_wrapper.c
 execute_process (COMMAND uname -p OUTPUT_VARIABLE PROC_ARCH)
 
 # Get Python Version
-execute_process (COMMAND python -c "import sys; print str (sys.version_info.major) + '.' + str (sys.version_info.minor)"
+execute_process (COMMAND python -c "import sys; print str (sys.version_info[0]) + '.' + str (sys.version_info[1])"
 		 OUTPUT_VARIABLE PY_VERSION)
 
 string (REPLACE "\n" "" PROC_ARCH ${PROC_ARCH})
@@ -43,10 +43,9 @@ add_custom_command (OUTPUT ${PY_CCSM_LIB}
 add_custom_target (ccsm_module ALL DEPENDS
                    ${PY_CCSM_LIB})
 
-add_custom_target (uninstall
-		   COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/setup.py uninstall --prefix=${CMAKE_INSTALL_PREFIX}
-		   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-		   COMMENT "Uninstalling Python Files")
+set (UNINSTALL_COMMAND "python ${CMAKE_CURRENT_SOURCE_DIR}/setup.py uninstall --prefix=${CMAKE_INSTALL_PREFIX} --version=${VERSION}")
+
+compiz_add_code_to_uninstall_target (${UNINSTALL_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR})
 
 install (CODE
 	 "message (\"Installing python files\")

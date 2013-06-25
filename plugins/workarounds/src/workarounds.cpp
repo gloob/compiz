@@ -72,7 +72,7 @@ WorkaroundsWindow::clearInputShape (HideInfo *hideInfo)
     XShapeCombineRectangles (screen->dpy (), xid, ShapeInput, 0, 0,
 			     NULL, 0, ShapeSet, 0);
 
-    XShapeSelectInput (screen->dpy (), xid, ShapeNotify);
+    XShapeSelectInput (screen->dpy (), xid, ShapeNotifyMask);
 }
 
 /*
@@ -269,7 +269,7 @@ WorkaroundsWindow::unminimize ()
 }
 
 bool
-WorkaroundsWindow::minimized ()
+WorkaroundsWindow::minimized () const
 {
     return isMinimized;
 }
@@ -1167,14 +1167,14 @@ WorkaroundsWindow::~WorkaroundsWindow ()
 bool
 WorkaroundsPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
-
-    if ((CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)) &&
-        (CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI)))
+    if (CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) &&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
 	haveOpenGL = true;
     else
 	haveOpenGL = false;
 
-    return true;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
+
+    return false;
 }

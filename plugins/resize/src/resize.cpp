@@ -178,7 +178,8 @@ ResizeScreen::glPaintRectangle (const GLScreenPaintAttrib &sAttrib,
     }
 
     /* draw outline */
-    glLineWidth (2.0);
+    static const int borderWidth = 2;
+    glLineWidth (borderWidth);
     streamingBuffer->begin (GL_LINES);
     streamingBuffer->addColors (1, borderColor);
     streamingBuffer->addVertices (8, &vertexData2[0]);
@@ -194,7 +195,10 @@ ResizeScreen::glPaintRectangle (const GLScreenPaintAttrib &sAttrib,
 #endif
 
     CompositeScreen *cScreen = CompositeScreen::get (screen);
-    CompRect damage (box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
+    CompRect damage (box.x1 - borderWidth,
+                     box.y1 - borderWidth,
+                     box.x2 - box.x1 + 2 * borderWidth,
+                     box.y2 - box.y1 + 2 * borderWidth);
     cScreen->damageRegion (damage);
 }
 
@@ -205,15 +209,11 @@ ResizeScreen::glPaintOutput (const GLScreenPaintAttrib &sAttrib,
 			     CompOutput                *output,
 			     unsigned int              mask)
 {
-    bool status;
+    if (logic.w &&
+	logic.mode == ResizeOptions::ModeStretch)
+	mask |= PAINT_SCREEN_WITH_TRANSFORMED_WINDOWS_MASK;
 
-    if (logic.w)
-    {
-	if (logic.mode == ResizeOptions::ModeStretch)
-	    mask |= PAINT_SCREEN_WITH_TRANSFORMED_WINDOWS_MASK;
-    }
-
-    status = gScreen->glPaintOutput (sAttrib, transform, region, output, mask);
+    bool status = gScreen->glPaintOutput (sAttrib, transform, region, output, mask);
 
     if (status && logic.w)
     {
@@ -222,12 +222,16 @@ ResizeScreen::glPaintOutput (const GLScreenPaintAttrib &sAttrib,
 	border = optionGetBorderColor ();
 	fill   = optionGetFillColor ();
 
-	switch (logic.mode) {
+	switch (logic.mode)
+	{
 	    case ResizeOptions::ModeOutline:
 		glPaintRectangle (sAttrib, transform, output, border, NULL);
 		break;
+
 	    case ResizeOptions::ModeRectangle:
 		glPaintRectangle (sAttrib, transform, output, border, fill);
+		break;
+
 	    default:
 		break;
 	}
@@ -249,9 +253,7 @@ ResizeWindow::glPaint (const GLWindowPaintAttrib &attrib,
     {
 	GLMatrix       wTransform (transform);
 	BoxRec	       box;
-	float	       xOrigin, yOrigin;
 	float	       xScale, yScale;
-	int            x, y;
 
 	if (mask & PAINT_WINDOW_OCCLUSION_DETECTION_MASK)
 	    return false;
@@ -267,11 +269,11 @@ ResizeWindow::glPaint (const GLWindowPaintAttrib &attrib,
 	rScreen->logic.getPaintRectangle (&box);
 	getStretchScale (&box, &xScale, &yScale);
 
-	x = window->geometry (). x ();
-	y = window->geometry (). y ();
+	int x = window->geometry (). x ();
+	int y = window->geometry (). y ();
 
-	xOrigin = x - window->border ().left;
-	yOrigin = y - window->border ().top;
+	float xOrigin = x - window->border ().left;
+	float yOrigin = y - window->border ().top;
 
 	wTransform.translate (xOrigin, yOrigin, 0.0f);
 	wTransform.scale (xScale, yScale, 1.0f);
@@ -283,9 +285,7 @@ ResizeWindow::glPaint (const GLWindowPaintAttrib &attrib,
 			 mask | PAINT_WINDOW_TRANSFORMED_MASK);
     }
     else
-    {
 	status = gWindow->glPaint (attrib, transform, region, mask);
-    }
 
     return status;
 }
@@ -346,18 +346,22 @@ ResizeScreen::optionChanged (CompOption		    *option,
 	    mask = &logic.outlineMask;
 	    valueMask = optionGetOutlineModifierMask ();
 	    break;
+
 	case ResizeOptions::RectangleModifier:
 	    mask = &logic.rectangleMask;
 	    valueMask = optionGetRectangleModifierMask ();
 	    break;
+
 	case ResizeOptions::StretchModifier:
 	    mask = &logic.stretchMask;
 	    valueMask = optionGetStretchModifierMask ();
 	    break;
-        case ResizeOptions::CenteredModifier:
+
+	case ResizeOptions::CenteredModifier:
 	    mask = &logic.centeredMask;
 	    valueMask = optionGetCenteredModifierMask ();
 	    break;
+
 	default:
 	    break;
     }
@@ -481,18 +485,15 @@ ResizeWindow::ResizeWindow (CompWindow *w) :
 	GLWindowInterface::setHandler (gWindow, false);
 }
 
-
 ResizeWindow::~ResizeWindow ()
 {
 }
 
-
 bool
 ResizePluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	 return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
 
-    return true;
+    return false;
 }
-

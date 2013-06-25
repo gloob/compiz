@@ -28,9 +28,12 @@
 #ifndef _OPENGL_PRIVATES_H
 #define _OPENGL_PRIVATES_H
 
+#include <memory>
+
 #include <composite/composite.h>
 #include <opengl/opengl.h>
 #include <core/atoms.h>
+#include <core/configurerequestbuffer.h>
 
 #ifdef USE_GLES
 #include <opengl/framebufferobject.h>
@@ -49,8 +52,10 @@ class GLDoubleBuffer :
 {
     public:
 
-	GLDoubleBuffer (Display *,
-			const CompSize &);
+	GLDoubleBuffer (Display                                             *,
+			const CompSize                                      &,
+			const compiz::opengl::impl::GLXSwapIntervalEXTFunc  &,
+			const compiz::opengl::impl::GLXWaitVideoSyncSGIFunc &);
 
     protected:
 
@@ -74,6 +79,7 @@ class GLXDoubleBuffer :
 	void blit (const CompRegion &region) const;
 	bool fallbackBlitAvailable () const;
 	void fallbackBlit (const CompRegion &region) const;
+	void copyFrontToBack () const;
 
     protected:
 
@@ -96,6 +102,7 @@ class EGLDoubleBuffer :
 	void blit (const CompRegion &region) const;
 	bool fallbackBlitAvailable () const;
 	void fallbackBlit (const CompRegion &region) const;
+	void copyFrontToBack () const;
 
     private:
 
@@ -133,6 +140,7 @@ class PrivateGLScreen :
 			   const CompRegion    &region);
 
 	bool hasVSync ();
+	bool requiredForcedRefreshRate ();
 
 	void updateRenderMode ();
 
@@ -152,6 +160,8 @@ class PrivateGLScreen :
 	void updateScreenBackground ();
 
 	void updateView ();
+
+	bool driverIsBlacklisted (const char *regex) const;
 
     public:
 
@@ -197,6 +207,8 @@ class PrivateGLScreen :
 	std::vector<GLTexture::BindPixmapProc> bindPixmap;
 	bool hasCompositing;
 	bool commonFrontbuffer;
+	bool incorrectRefreshRate; // hack for NVIDIA specifying an incorrect
+				   // refresh rate, causing us to miss vblanks
 
 	GLIcon defaultIcon;
 
@@ -209,6 +221,11 @@ class PrivateGLScreen :
 
 	Pixmap rootPixmapCopy;
 	CompSize rootPixmapSize;
+
+	const char *glVendor, *glRenderer, *glVersion;
+
+	mutable CompString prevRegex;
+	mutable bool       prevBlacklisted;
 };
 
 class PrivateGLWindow :
@@ -267,6 +284,8 @@ class PrivateGLWindow :
 	GLVertexBuffer::AutoProgram *autoProgram;
 
 	std::list<GLIcon> icons;
+
+	compiz::window::configure_buffers::Releasable::Ptr configureLock;
 };
 
 #endif

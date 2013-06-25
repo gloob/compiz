@@ -1,4 +1,6 @@
 /*
+ * jpeg.cpp
+ * based on:
  * beryl-plugins::jpeg.c - adds JPEG image support to beryl.
  * Copyright: (C) 2006 Nicholas Thomas
  *		       Danny Baumann (JPEG writing, option stuff)
@@ -252,12 +254,12 @@ JpegScreen::imageToFile (CompString &path,
 			 void	   *data)
 {
     bool       status = false;
-    FILE       *file;
     CompString fileName = fileNameWithExtension (path);
 
     if (format == "jpeg" || format == "jpg" ||
     	!(status = screen->imageToFile (path, format, size, stride, data)))
     {
+	FILE *file;
     	file = fopen (fileName.c_str (), "wb");
     	if (file)
 	{
@@ -305,9 +307,8 @@ JpegScreen::JpegScreen (CompScreen *screen) :
 bool
 JpegPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
 
-    return true;
+    return false;
 }
-

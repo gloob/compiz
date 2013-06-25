@@ -1,4 +1,5 @@
 /*
+ Modified for libcompizconfig usage, by Sam Spilsbury (smspillaz@gmail.com)
  Based upon libiniparser, by Nicolas Devillard
  Hacked into 1 file (m-iniparser) by Freek/2005
  Original terms following:
@@ -32,6 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <ccs.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -123,7 +126,7 @@ strlwc (char * s)
     while (i < ASCIILINESZ && s[i])
     {
 	l[i] = (char) tolower ((int) s[i]);
-	i++;
+	++i;
     }
 
     l[ASCIILINESZ] = (char) 0;
@@ -150,7 +153,7 @@ strskp (char * s)
 	return NULL;
 
     while (isspace ((int) *skip) && *skip)
-	skip++;
+	++skip;
 
     return skip;
 }
@@ -187,7 +190,7 @@ strcrop (char * s)
 	if (!isspace ((int) * (last - 1)))
 	    break;
 
-    	last --;
+	--last;
     }
 
     *last = (char) 0;
@@ -247,7 +250,7 @@ static unsigned dictionary_hash (char * key)
 
     len = strlen (key);
 
-    for (hash = 0, i = 0; i < len; i++)
+    for (hash = 0, i = 0; i < len; ++i)
     {
 	hash += (unsigned) key[i];
 	hash += (hash << 10);
@@ -330,7 +333,7 @@ dictionary_del (dictionary * d)
     if (!d)
 	return;
 
-    for (i = 0; i < d->size; i++)
+    for (i = 0; i < d->size; ++i)
     {
 	if (d->key[i])
 	    free (d->key[i]);
@@ -369,7 +372,7 @@ dictionary_get (dictionary * d, char * key, char * def)
 
     hash = dictionary_hash (key);
 
-    for (i = 0; i < d->size; i++)
+    for (i = 0; i < d->size; ++i)
     {
 	if (!d->key)
     	    continue;
@@ -428,7 +431,7 @@ dictionary_set (dictionary * d, char * key, char * val)
     /* Find if value is already in blackboard */
     if (d->n > 0)
     {
-	for (i = 0; i < d->size; i++)
+	for (i = 0; i < d->size; ++i)
 	{
 	    if (!d->key[i])
 		continue;
@@ -466,7 +469,7 @@ dictionary_set (dictionary * d, char * key, char * val)
     }
 
     /* Insert key in the first empty slot */
-    for (i = 0; i < d->size; i++)
+    for (i = 0; i < d->size; ++i)
     {
 	if (!d->key[i])
 	{
@@ -479,7 +482,7 @@ dictionary_set (dictionary * d, char * key, char * val)
     d->key[i]  = strdup (key);
     d->val[i]  = val ? strdup (val) : NULL;
     d->hash[i] = hash;
-    d->n++;
+    ++d->n;
 }
 
 /*-------------------------------------------------------------------------*/
@@ -501,7 +504,7 @@ dictionary_unset (dictionary * d, char * key)
 
     hash = dictionary_hash (key);
 
-    for (i = 0; i < d->size; i++)
+    for (i = 0; i < d->size; ++i)
     {
 	if (!d->key[i])
 	    continue;
@@ -532,7 +535,7 @@ dictionary_unset (dictionary * d, char * key)
     }
 
     d->hash[i] = 0;
-    d->n --;
+    --d->n;
 }
 
 /* iniparser.c.c following */
@@ -587,13 +590,13 @@ iniparser_getnsec (dictionary * d)
 	return -1;
 
     nsec = 0;
-    for (i = 0; i < d->size; i++)
+    for (i = 0; i < d->size; ++i)
     {
 	if (!d->key[i])
 	    continue;
 
 	if (!strchr (d->key[i], ':'))
-    	    nsec++;
+	    ++nsec;
     }
 
     return nsec;
@@ -623,14 +626,14 @@ iniparser_getsecname (dictionary * d, int n)
 	return NULL;
 
     foundsec = 0;
-    for (i = 0; i < d->size; i++)
+    for (i = 0; i < d->size; ++i)
     {
 	if (!d->key[i])
 	    continue;
 
 	if (!strchr (d->key[i], ':'))
 	{
-    	    foundsec++;
+	    ++foundsec;
 	    if (foundsec > n)
 		break;
 	}
@@ -682,7 +685,7 @@ iniparser_dump_ini (dictionary * d, const char * file_name)
     if (nsec < 1)
     {
 	/* No section in file: dump all keys as they are */
-	for (i = 0; i < d->size; i++)
+	for (i = 0; i < d->size; ++i)
 	{
 	    if (!d->key[i])
 		continue;
@@ -695,14 +698,14 @@ iniparser_dump_ini (dictionary * d, const char * file_name)
 	return;
     }
 
-    for (i = 0; i < nsec; i++)
+    for (i = 0; i < nsec; ++i)
     {
 	secname = iniparser_getsecname (d, i);
 	seclen  = (int) strlen (secname);
 	fprintf (f, "[%s]\n", secname);
 	sprintf (keym, "%s:", secname);
 
-	for (j = 0; j < d->size; j++)
+	for (j = 0; j < d->size; ++j)
 	{
 	    if (!d->key[j])
 		continue;
@@ -844,12 +847,13 @@ iniparser_new (char *ininame)
 
     lock = ini_file_lock (ininame, FALSE);
     if (!lock)
-	return NULL;
+	ccsWarning ("unable to lock file %s, reads may conflict", ininame);
 
     ini = fopen (ininame, "r");
     if (!ini)
     {
-	ini_file_unlock (lock );
+	if (lock)
+	    ini_file_unlock (lock );
 	return NULL;
     }
 
@@ -863,7 +867,7 @@ iniparser_new (char *ininame)
 
     while (fgets (lin, ASCIILINESZ, ini) != NULL)
     {
-	lineno++;
+	++lineno;
 	where = strskp (lin); /* Skip leading spaces */
 
 	if (*where == ';' || *where == '#' || *where == 0)
@@ -903,7 +907,8 @@ iniparser_new (char *ininame)
     }
 
     fclose (ini);
-    ini_file_unlock (lock );
+    if (lock)
+	ini_file_unlock (lock );
 
     return d;
 }

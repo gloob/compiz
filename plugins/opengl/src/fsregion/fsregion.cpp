@@ -28,9 +28,18 @@
 namespace compiz {
 namespace opengl {
 
-FullscreenRegion::FullscreenRegion (const CompRect &rect) :
-    covered (false),
-    untouched (rect)
+FullscreenRegion::FullscreenRegion (const CompRect &output) :
+    untouched (output),
+    orig (output),
+    allOutputs (output)
+{
+}
+
+FullscreenRegion::FullscreenRegion (const CompRect &output,
+                                    const CompRegion &all) :
+    untouched (output),
+    orig (output),
+    allOutputs (all)
 {
 }
 
@@ -39,15 +48,28 @@ FullscreenRegion::isCoveredBy (const CompRegion &region, WinFlags flags)
 {
     bool fullscreen = false;
 
-    if (!covered && !(flags & (Desktop | Alpha)) && region == untouched)
+    if (!(flags & (Desktop | Alpha | NoOcclusionDetection)) &&
+        region == untouched &&
+        region == orig)
     {
-	covered = true;
 	fullscreen = true;
     }
 
     untouched -= region;
 
     return fullscreen;
+}
+
+bool
+FullscreenRegion::allowRedirection (const CompRegion &region)
+{
+    /* Don't allow existing unredirected windows that cover this
+     * region to be redirected again as they were probably unredirected
+     * on another monitor
+     * Also be careful to not allow unredirection of offscreen windows
+     * (outside of allOutputs).
+     */
+    return region.intersects (orig) || !region.intersects (allOutputs);
 }
 
 } // namespace opengl

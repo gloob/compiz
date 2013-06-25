@@ -282,7 +282,7 @@ DbusScreen::dbusHandlePluginIntrospectMessage (DBusConnection *connection,
 
 	for (s = d->screens; s; s = s->next)
 	{
-	    sprintf (screenName, "screen%d", s->screenNum);
+	    snprintf (screenName, 256, "screen%d", s->screenNum);
 	    dbusIntrospectAddNode (writer, screenName);
 	}
     }
@@ -1650,7 +1650,7 @@ DbusScreen::sendChangeSignalForOption (CompOption       *o,
     if (!o)
 	return;
 
-    sprintf (path, "%s/%s/%s/%s", COMPIZ_DBUS_ROOT_PATH,
+    snprintf (path, 256, "%s/%s/%s/%s", COMPIZ_DBUS_ROOT_PATH,
 	     plugin.c_str (), "options", o->name ().c_str ());
 
     signal = dbus_message_new_signal (path,
@@ -1993,7 +1993,8 @@ DbusScreen::~DbusScreen ()
 bool
 DbusPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
-	return false;
-    return true;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION))
+	return true;
+
+    return false;
 }

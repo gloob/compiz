@@ -8,11 +8,16 @@
 #include <boost/bind.hpp>
 
 #include <glib-object.h>
+#include <gio/gio.h>
+
+#include <ccs-object.h>
+#include <ccs_gsettings_interface_wrapper.h>
+#include <ccs_gsettings_interface.h>
 
 #include "test_gsettings_tests.h"
-#include <ccs_gsettings_interface_wrapper.h>
 
 using ::testing::NotNull;
+using ::testing::IsNull;
 using ::testing::Eq;
 using ::testing::_;
 
@@ -81,7 +86,37 @@ class CCSGSettingsWrapperWithMemoryBackendEnvGoodAllocatorAutoInitTest :
 	}
 };
 
+TEST_F (CCSGSettingsWrapperWithMemoryBackendEnvGoodAllocatorTest, TestWrapperConstructionWithBadSchemaReturnsNull)
+{
+    const std::string badSchema ("org.compiz.invalid");
+
+    EXPECT_THAT (ccsGSettingsWrapperNewForSchemaWithPath (badSchema.c_str (),
+							  mockPath.c_str (),
+							  &ccsDefaultObjectAllocator),
+		 IsNull ());
+}
+
+TEST_F (CCSGSettingsWrapperWithMemoryBackendEnvGoodAllocatorTest, TestWrapperConstructionWithPathForNonrelocableSchemaNull)
+{
+    const std::string badSchema ("org.compiz");
+
+    EXPECT_THAT (ccsGSettingsWrapperNewForSchemaWithPath (badSchema.c_str (),
+							  mockPath.c_str (),
+							  &ccsDefaultObjectAllocator),
+		 IsNull ());
+}
+
 TEST_F (CCSGSettingsWrapperWithMemoryBackendEnvGoodAllocatorTest, TestWrapperConstruction)
+{
+    const std::string nonrelocatableSchema ("org.compiz");
+    boost::shared_ptr <CCSGSettingsWrapper> wrapper (ccsGSettingsWrapperNewForSchema (nonrelocatableSchema.c_str (),
+										      &ccsDefaultObjectAllocator),
+						     boost::bind (ccsFreeGSettingsWrapper, _1));
+
+    EXPECT_THAT (wrapper.get (), NotNull ());
+}
+
+TEST_F (CCSGSettingsWrapperWithMemoryBackendEnvGoodAllocatorTest, TestWrapperConstructionWithPath)
 {
     boost::shared_ptr <CCSGSettingsWrapper> wrapper (ccsGSettingsWrapperNewForSchemaWithPath (mockSchema.c_str (),
 											      mockPath.c_str (),

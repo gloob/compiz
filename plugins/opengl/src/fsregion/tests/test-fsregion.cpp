@@ -68,6 +68,25 @@ TEST (OpenGLFullscreenRegion, AlphaOverFullscreen)
                                        FullscreenRegion::Desktop));
 }
 
+TEST (OpenGLFullscreenRegion, NoOcclusionFullscreen)
+{
+    FullscreenRegion monitor (CompRect (0, 0, 1024, 768));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 0, 1024, 768),
+                                       FullscreenRegion::NoOcclusionDetection));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 0, 1024, 768),
+                                       FullscreenRegion::Desktop));
+}
+
+TEST (OpenGLFullscreenRegion, NoOcclusionOverFullscreen)
+{
+    FullscreenRegion monitor (CompRect (0, 0, 1024, 768));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (50, 60, 70, 80),
+                                       FullscreenRegion::NoOcclusionDetection));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 0, 1024, 768)));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 0, 1024, 768),
+                                       FullscreenRegion::Desktop));
+}
+
 TEST (OpenGLFullscreenRegion, NormalWindows)
 {
     FullscreenRegion monitor (CompRect (0, 0, 1024, 768));
@@ -137,4 +156,35 @@ TEST (OpenGLFullscreenRegion, Overflow)
                                        FullscreenRegion::Desktop));
 }
 
+TEST (OpenGLFullscreenRegion, KeepUnredirectedStateIfNotOnMonitor)
+{
+    CompRect left (0, 0, 1024, 768);
+    CompRect right (1025, 0, 1024, 768);
+    CompRegion all (0, 0, 2048, 768);
+    CompRect offscreen1 (2048, 0, 1024, 768);
+    CompRect offscreen2 (-1024, 0, 1024, 768);
+    CompRegion window (right);
+    FullscreenRegion monitor (left, all);
+
+    /* Eg, not covering the monitor, should be redirected */
+    EXPECT_FALSE (monitor.isCoveredBy (window));
+
+    /* Don't allow the redirection however, because we weren't
+     * covering the monitor at all. */
+    EXPECT_FALSE (monitor.allowRedirection (window));
+
+    /* Verify off-screen windows are always redirected (eg. other viewports) */
+    EXPECT_TRUE (monitor.allowRedirection (offscreen1));
+    EXPECT_TRUE (monitor.allowRedirection (offscreen2));
+}
+
+TEST (OpenGLFullscreenRegion, MaximizedWithDocks)  // LP: #1053902
+{
+    FullscreenRegion monitor (CompRect (0, 0, 1024, 768));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 0, 1024, 24)));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 24, 64, 744)));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (64, 24, 960, 744)));
+    EXPECT_FALSE (monitor.isCoveredBy (CompRegion (0, 0, 1024, 768),
+                                       FullscreenRegion::Desktop));
+}
 

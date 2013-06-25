@@ -488,11 +488,9 @@ TdScreen::cubeShouldPaintViewport (const GLScreenPaintAttrib &attrib,
 				   CompOutput		     *outputPtr,
 				   PaintOrder		     order)
 {
-    bool rv = false;
-
     CUBE_SCREEN (screen);
 
-    rv = cs->cubeShouldPaintViewport (attrib, transform, outputPtr, order);
+    bool rv = cs->cubeShouldPaintViewport (attrib, transform, outputPtr, order);
 
     if (mActive)
     {
@@ -595,6 +593,7 @@ TdWindow::TdWindow (CompWindow *window) :
     cWindow (CompositeWindow::get (window)),
     gWindow (GLWindow::get (window)),
     mIs3D (false),
+    mFtb (false),
     mDepth (0.0f)
 {
     GLWindowInterface::setHandler (gWindow, false);
@@ -607,11 +606,11 @@ TdWindow::~TdWindow ()
 bool
 TdPluginVTable::init ()
 {
-    if (!CompPlugin::checkPluginABI ("core", CORE_ABIVERSION) ||
-    	!CompPlugin::checkPluginABI ("cube", COMPIZ_CUBE_ABI) ||
-        !CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI) ||
-        !CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
-        return false;
+    if (CompPlugin::checkPluginABI ("core", CORE_ABIVERSION)		&&
+	CompPlugin::checkPluginABI ("cube", COMPIZ_CUBE_ABI)		&&
+	CompPlugin::checkPluginABI ("composite", COMPIZ_COMPOSITE_ABI)	&&
+	CompPlugin::checkPluginABI ("opengl", COMPIZ_OPENGL_ABI))
+	return true;
 
-    return true;
+    return false;
 }
