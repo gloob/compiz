@@ -48,6 +48,8 @@ class ScalePluginVTable :
 };
 
 COMPIZ_PLUGIN_20090315 (scale, ScalePluginVTable)
+static ScaleScreen *sScreen = NULL;
+static PrivateScaleScreen *spScreen = NULL;
 
 bool
 PrivateScaleWindow::isNeverScaleWin () const
@@ -132,14 +134,14 @@ ScaleWindow::scalePaintDecoration (const GLWindowPaintAttrib& attrib,
 {
     WRAPABLE_HND_FUNCTN (scalePaintDecoration, attrib, transform, region, mask)
 
-    if (priv->spScreen->optionGetOverlayIcon () != ScaleOptions::OverlayIconNone)
+    if (spScreen->optionGetOverlayIcon () != ScaleOptions::OverlayIconNone)
     {
 	GLWindowPaintAttrib sAttrib (attrib);
 	GLTexture           *icon;
 
 	icon = priv->gWindow->getIcon (512, 512);
 	if (!icon)
-	    icon = priv->spScreen->gScreen->defaultIcon ();
+	    icon = spScreen->gScreen->defaultIcon ();
 
 	if (icon)
 	{
@@ -151,7 +153,7 @@ ScaleWindow::scalePaintDecoration (const GLWindowPaintAttrib& attrib,
 	    scaledWinWidth  = priv->window->width () * priv->scale;
 	    scaledWinHeight = priv->window->height () * priv->scale;
 
-	    switch (priv->spScreen->optionGetOverlayIcon ()) {
+	    switch (spScreen->optionGetOverlayIcon ()) {
 		case ScaleOptions::OverlayIconNone:
 		case ScaleOptions::OverlayIconEmblem:
 		    scale = 1.0f;
@@ -167,7 +169,7 @@ ScaleWindow::scalePaintDecoration (const GLWindowPaintAttrib& attrib,
 	    width  = icon->width () * scale;
 	    height = icon->height () * scale;
 
-	    switch (priv->spScreen->optionGetOverlayIcon ()) {
+	    switch (spScreen->optionGetOverlayIcon ()) {
 		case ScaleOptions::OverlayIconNone:
 		case ScaleOptions::OverlayIconEmblem:
 		    x = priv->window->x () + scaledWinWidth - icon->width ();
@@ -258,7 +260,8 @@ ScaleWindow::setScaledPaintAttributes (GLWindowPaintAttrib& attrib)
     /* Windows that wouldn't be visible before and after entering
      * scale mode (because some plugin modified CompWindow::focus)
      * should be faded in and out */
-    if (window->state () & CompWindowStateHiddenMask)
+    if (window->state () & CompWindowStateHiddenMask &&
+	!window->inShowDesktopMode ())
     {
 	GLfloat factor = 0;
 	GLfloat targetX, targetY, targetScale;
@@ -320,21 +323,21 @@ ScaleWindow::setScaledPaintAttributes (GLWindowPaintAttrib& attrib)
 	attrib.opacity *= factor;
     }
 
-    if (priv->adjust || priv->slot)
+    if ((priv->adjust || priv->slot) && priv->isScaleWin())
     {
-	if (priv->window->id ()     != priv->spScreen->selectedWindow &&
-	    priv->spScreen->opacity != OPAQUE                         &&
-	    priv->spScreen->state   != ScaleScreen::In)
+	if (priv->window->id () != spScreen->selectedWindow &&
+	    spScreen->opacity != OPAQUE                     &&
+	    spScreen->state   != ScaleScreen::In)
 	{
 	    /* modify opacity of windows that are not active */
-	    attrib.opacity = (attrib.opacity * priv->spScreen->opacity) >> 16;
+	    attrib.opacity = (attrib.opacity * spScreen->opacity) >> 16;
 	}
 
 	drawScaled = true;
     }
-    else if (priv->spScreen->state != ScaleScreen::In)
+    else if (spScreen->state != ScaleScreen::In)
     {
-	if (priv->spScreen->optionGetDarkenBack ())
+	if (spScreen->optionGetDarkenBack ())
 	{
 	    /* modify brightness of the other windows */
 	    attrib.brightness = attrib.brightness / 2;
@@ -346,7 +349,7 @@ ScaleWindow::setScaledPaintAttributes (GLWindowPaintAttrib& attrib)
 	{
 	    int moMode, output;
 
-	    moMode = priv->spScreen->getMultioutputMode ();
+	    moMode = spScreen->getMultioutputMode ();
 
 	    switch (moMode) {
 		case ScaleOptions::MultioutputModeOnCurrentOutputDevice:
@@ -359,6 +362,12 @@ ScaleWindow::setScaledPaintAttributes (GLWindowPaintAttrib& attrib)
 		    break;
 	    }
 	}
+
+	if (priv->window->id() == spScreen->selectedWindow)
+	    spScreen->selectedWindow = 0;
+
+	if (priv->window->id() == spScreen->hoveredWindow)
+	    spScreen->hoveredWindow = 0;
     }
 
     return drawScaled;
@@ -435,15 +444,15 @@ PrivateScaleScreen::layoutSlotsForArea (const CompRect& workArea,
     int spacing = optionGetSpacing ();
     int nSlots  = 0;
 
-    y      = workArea.y () + spacing;
-    height = (workArea.height () - (lines + 1) * spacing) / lines;
+    y      = optionGetYOffset() + workArea.y () + spacing;
+    height = (workArea.height () - optionGetYOffset() - (lines + 1) * spacing) / lines;
 
     for (int i = 0; i < lines; i++)
     {
 	n = MIN (nWindows - nSlots, ceilf ((float) nWindows / lines));
 
-	x     = workArea.x () + spacing;
-	width = (workArea.width () - (n + 1) * spacing) / n;
+	x     = optionGetXOffset() + workArea.x () + spacing;
+	width = (workArea.width () - optionGetXOffset() - (n + 1) * spacing) / n;
 
 	for (int j = 0; j < n; j++)
 	{
@@ -706,7 +715,7 @@ PrivateScaleScreen::layoutThumbsAll ()
 
     slots.resize (windows.size ());
 
-    return ScaleScreen::get (screen)->layoutSlotsAndAssignWindows ();
+    return sScreen->layoutSlotsAndAssignWindows ();
 }
 
 bool
@@ -745,7 +754,7 @@ PrivateScaleScreen::layoutThumbsSingle ()
 	    if (!windows.empty ())
 	    {
 		slots.resize (windows.size ());
-		ret |= ScaleScreen::get (screen)->layoutSlotsAndAssignWindows ();
+		ret |= sScreen->layoutSlotsAndAssignWindows ();
 
 		foreach (ScaleWindow *sw, windows)
 		    slotWindows[sw] = *sw->priv->slot;
@@ -1273,14 +1282,14 @@ ScaleWindow::scaleSelectWindow ()
 {
     WRAPABLE_HND_FUNCTN (scaleSelectWindow)
 
-    if (priv->spScreen->selectedWindow != priv->window->id ())
+    if (spScreen->selectedWindow != priv->window->id ())
     {
 	CompWindow *oldW, *newW;
 
-	oldW = screen->findWindow (priv->spScreen->selectedWindow);
+	oldW = screen->findWindow (spScreen->selectedWindow);
 	newW = screen->findWindow (priv->window->id ());
 
-	priv->spScreen->selectedWindow = priv->window->id ();
+	spScreen->selectedWindow = priv->window->id ();
 
 	if (oldW)
 	    CompositeWindow::get (oldW)->addDamage ();
@@ -1479,7 +1488,8 @@ PrivateScaleScreen::moveFocusWindow (int dx,
 	lastActiveNum    = focus->activeNum ();
 	lastActiveWindow = focus->id ();
 
-	focus->moveInputFocusTo ();
+	if (!focus->focused ())
+	    focus->moveInputFocusTo ();
     }
 }
 
@@ -1609,17 +1619,33 @@ PrivateScaleScreen::handleEvent (XEvent *event)
 		    scaleTerminate (&optionGetInitiateEdge (), 0, o);
 		    scaleTerminate (&optionGetInitiateKey (), 0, o);
 		}
-		else if (optionGetShowDesktop () &&
+		else if (optionGetClickOnDesktop () == 1 &&
 			 event->xbutton.button == Button1)
 		{
 		    CompPoint pointer (button->x_root, button->y_root);
 		    CompRect  workArea (screen->workArea ());
+		    workArea.setX (workArea.x() + optionGetXOffset ());
+		    workArea.setY (workArea.y() + optionGetYOffset ());
 
 		    if (workArea.contains (pointer))
 		    {
 			scaleTerminate (&optionGetInitiateEdge (), 0, o);
 			scaleTerminate (&optionGetInitiateKey (), 0, o);
 			screen->enterShowDesktopMode ();
+		    }
+		}
+		else if (optionGetClickOnDesktop () == 2 &&
+			 event->xbutton.button == Button1)
+		{
+		    CompPoint pointer (button->x_root, button->y_root);
+		    CompRect  workArea (screen->workArea ());
+		    workArea.setX (workArea.x() + optionGetXOffset ());
+		    workArea.setY (workArea.y() + optionGetYOffset ());
+
+		    if (workArea.contains (pointer))
+		    {
+			scaleTerminate (&optionGetInitiateEdge (), 0, o);
+			scaleTerminate (&optionGetInitiateKey (), 0, o);
 		    }
 		}
 	    }
@@ -1768,11 +1794,15 @@ ScaleScreen::ScaleScreen (CompScreen *s) :
     PluginClassHandler<ScaleScreen, CompScreen, COMPIZ_SCALE_ABI> (s),
     priv (new PrivateScaleScreen (s))
 {
+    sScreen = this;
+    spScreen = priv;
 }
 
 ScaleScreen::~ScaleScreen ()
 {
     delete priv;
+    sScreen = NULL;
+    spScreen = NULL;
 }
 
 template class PluginClassHandler<ScaleWindow, CompWindow, COMPIZ_SCALE_ABI>;
@@ -1889,8 +1919,6 @@ PrivateScaleWindow::PrivateScaleWindow (CompWindow *w) :
     cWindow (CompositeWindow::get (w)),
     gWindow (GLWindow::get (w)),
     sWindow (ScaleWindow::get (w)),
-    sScreen (ScaleScreen::get (screen)),
-    spScreen (sScreen->priv),
     slot (NULL),
     sid (0),
     distance (0.0),

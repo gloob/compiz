@@ -1,7 +1,7 @@
 #
 # Main CMakeLists.txt for compiz
 #
-project (compiz)
+project (compiz C CXX)
 
 set (CMAKE_MODULE_PATH_ORIG ${CMAKE_MODULE_PATH})
 set (COMPIZ_CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
@@ -23,7 +23,6 @@ include (CompizPackage)
 include (CompizGSettings)
 
 # Google Test and Xorg-GTest
-include (GoogleTest)
 include (XorgGTest)
 
 include (cmake/base.cmake)
@@ -157,11 +156,9 @@ set (COMPIZ_INTERNAL_INCLUDES
 
 if (COMPIZ_BUILD_TESTING)
 
-    find_package (GoogleTest)
+    include (GoogleTest)
 
     if (GOOGLE_TEST_AND_MOCK_FOUND)
-
-	build_google_test_locally (${CMAKE_BINARY_DIR}/__gtest)
 
 	if (BUILD_XORG_GTEST)
 

@@ -639,6 +639,7 @@ class ValueContainer
 {
     public:
 
+	virtual ~ValueContainer () {}
 	typedef boost::shared_ptr <ValueContainer> Ptr;
 
 	virtual const SettingValueType &
@@ -703,6 +704,10 @@ ContainNormal (const SettingValueType &value)
 class ListValueContainerBase :
     public ValueContainer <CCSSettingValueList>
 {
+	public:
+
+	virtual ~ListValueContainerBase () {}
+
     protected:
 
 	const CCSSettingValuePtr &
@@ -766,7 +771,6 @@ class ListValueContainerFromChildValueBase :
 		mWrapper.reset (new cci::SettingValueListWrapper (NULL,
 								  cci::Deep,
 								  type,
-								  info,
 								  setting));
 		mWrapper->append (value);
 	    }
@@ -799,7 +803,6 @@ class ListValueContainerFromList :
 		mWrapper.reset (new cci::SettingValueListWrapper (ccsCopyList (mRawValueList, setting.get ()),
 								  cci::Deep,
 								  type,
-								  info,
 								  setting));
 	    }
 
@@ -819,6 +822,7 @@ class ChildValueListValueContainer :
 	    mRawChildValue (value)
 	{
 	}
+	virtual ~ChildValueListValueContainer () {}
 
     private:
 
@@ -1406,6 +1410,7 @@ class SetFailureParam :
 					      nonDefault)
 	{
 	}
+	virtual ~SetFailureParam () {}
 
 	virtual CCSSetStatus setToFailValue (SetMethod method)
 	{
