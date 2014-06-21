@@ -2,9 +2,9 @@ debian/tmp/usr/*/compiz/*addhelper.*
 debian/tmp/usr/*/compiz/*annotate.*
 debian/tmp/usr/*/compiz/*bench.*
 debian/tmp/usr/*/compiz/*clone.*
-debian/tmp/usr/*/compiz/*commands.*
 debian/tmp/usr/*/compiz/*crashhandler.*
 debian/tmp/usr/*/compiz/*cube.*
+debian/tmp/usr/share/compiz/cube
 debian/tmp/usr/*/compiz/*cubeaddon.*
 debian/tmp/usr/share/compiz/cubeaddon
 debian/tmp/usr/*/compiz/*dbus.*

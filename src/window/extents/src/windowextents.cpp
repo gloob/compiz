@@ -35,9 +35,15 @@ compiz::window::extents::shift (const CompWindowExtents &extents,
     CompPoint rv = CompPoint ();
 
     switch (gravity) {
+	/* We treat StaticGravity like NorthWestGravity here
+	 * as when decorating / undecorating the window we
+	 * really do need to move it in order to handle
+	 * any cases where it goes offscreen */
+	case StaticGravity:
 	case NorthGravity:
 	case NorthWestGravity:
 	case NorthEastGravity:
+	case CenterGravity:
 	    rv.setY (extents.top);
 	    break;
 	case SouthGravity:
@@ -50,6 +56,11 @@ compiz::window::extents::shift (const CompWindowExtents &extents,
     }
 
     switch (gravity) {
+	/* We treat StaticGravity like NorthWestGravity here
+	 * as when decorating / undecorating the window we
+	 * really do need to move it in order to handle
+	 * any cases where it goes offscreen */
+	case StaticGravity:
 	case WestGravity:
 	case NorthWestGravity:
 	case SouthWestGravity:
@@ -65,15 +76,19 @@ compiz::window::extents::shift (const CompWindowExtents &extents,
     return rv;
 }
 
-compiz::window::extents::Extents::Extents () {}
+compiz::window::extents::Extents::Extents () :
+  left (0),
+  right (0),
+  top (0),
+  bottom (0)
+{}
 
 compiz::window::extents::Extents::Extents (int left, int right, int top, int bottom) :
     left (left),
     right (right),
     top (top),
     bottom (bottom)
-{
-}
+{}
 
 /* Just here to keep ABI compatability */
 bool

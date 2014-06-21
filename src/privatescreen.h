@@ -314,14 +314,11 @@ class EventManager :
 
 	Glib::RefPtr <Glib::MainLoop>  mainloop;
 
-	/* We cannot use RefPtrs. See
-	 * https://bugzilla.gnome.org/show_bug.cgi?id=561885
-	 */
-	CompEventSource * source;
-	CompTimeoutSource * timeout;
-	CompSignalSource * sighupSource;
-	CompSignalSource * sigtermSource;
-	CompSignalSource * sigintSource;
+	Glib::RefPtr <CompEventSource> source;
+	Glib::RefPtr <CompTimeoutSource> timeout;
+	CompSignalSource *sighupSource;
+	CompSignalSource *sigtermSource;
+	CompSignalSource *sigintSource;
 	Glib::RefPtr <Glib::MainContext> ctx;
 
 	CompFileWatchList   fileWatch;
@@ -329,7 +326,7 @@ class EventManager :
 
 	// TODO - almost certainly the wrong data structure
 	// Why not a std::map<CompWatchFdHandle, CompWatchFd>?
-	std::list< CompWatchFd * > watchFds;
+	std::list<Glib::RefPtr<CompWatchFd> > watchFds;
 	CompWatchFdHandle        lastWatchFdHandle;
 
         bool	grabbed;   /* true once we receive a GrabNotify
@@ -403,6 +400,7 @@ class History : public virtual ::compiz::History,
 {
     public:
 	History();
+	virtual ~History () {}
 
 	void setCurrentActiveWindowHistory (int x, int y);
 
@@ -458,6 +456,7 @@ class StartupSequence : boost::noncopyable
 {
     public:
 	StartupSequence();
+	virtual ~StartupSequence() {}
 	void addSequence (SnStartupSequence *sequence, CompPoint const& vp);
 	void removeSequence (SnStartupSequence *sequence);
 	void removeAllSequences ();
@@ -519,6 +518,7 @@ public virtual ::compiz::Ping
 {
 public:
     Ping() : lastPing_(1) {}
+    virtual ~Ping() {}
     bool handlePingTimeout (WindowManager::iterator begin, WindowManager::iterator end, Display* dpy);
     unsigned int lastPing () const { return lastPing_; }
 
@@ -531,6 +531,7 @@ class DesktopWindowCount :
 {
 public:
     DesktopWindowCount();
+    virtual ~DesktopWindowCount() {}
     virtual void incrementDesktopWindowCount();
     virtual void decrementDesktopWindowCount();
     virtual int desktopWindowCount();
@@ -543,6 +544,7 @@ class MapNum :
 {
 public:
     MapNum();
+    virtual ~MapNum() {}
     virtual unsigned int nextMapNum();
 
 private:
@@ -555,6 +557,7 @@ class XWindowInfo :
 public:
     XWindowInfo(Display* const& dpy) :
 	dpy(dpy) {}
+    virtual ~XWindowInfo() {}
 
     virtual int getWmState (Window id);
     virtual void setWmState (int state, Window id) const;
@@ -621,15 +624,30 @@ class PrivateScreen :
 					   XButtonEvent       *event,
 					   CompOption::Vector &arguments);
 
+	bool shouldTriggerKeyPressAction (CompAction *action,
+					  XKeyEvent  *event);
+
+	bool shouldTriggerKeyReleaseAction (CompAction *action,
+					    XKeyEvent  *event);
+
+	bool shouldTriggerModifierPressAction (CompAction          *action,
+					       XkbStateNotifyEvent *event);
+
+	bool shouldTriggerModifierReleaseAction (CompAction          *action,
+						 XkbStateNotifyEvent *event);
+
 	bool triggerKeyPressBindings (CompOption::Vector &options,
+				      CompAction::Vector &actions,
 				      XKeyEvent          *event,
 				      CompOption::Vector &arguments);
 
 	bool triggerKeyReleaseBindings (CompOption::Vector &options,
+					CompAction::Vector &actions,
 					XKeyEvent          *event,
 					CompOption::Vector &arguments);
 
 	bool triggerStateNotifyBindings (CompOption::Vector  &options,
+					 CompAction::Vector  &actions,
 					 XkbStateNotifyEvent *event,
 					 CompOption::Vector  &arguments);
 
