@@ -13,7 +13,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * Author: Alejandro Leiva <aleiva@emergya.com>
+ * Author: Alejandro Leiva <gloob@litio.org>
  *
  */
 
@@ -61,7 +61,7 @@ class AccessibilityScreen :
 	void handleAccessibilityEvent (AccessibilityEvent *);
 
     public:
-        
+
 	CompScreen *screen;
 	AccessibilityHandlerList list;
 	int lastEventHandler;
@@ -81,5 +81,5 @@ class AccessibilityPluginVTable :
     public:
 
 	bool init();
-        
+
 };
