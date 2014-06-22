@@ -2079,7 +2079,6 @@ EZoomScreen::~EZoomScreen ()
     if (pollHandle.active ())
 	pollHandle.stop ();
 
-    if (a11yHandle->active ())
 	a11yHandle->unregisterAll ();
 
     if (zooms.size ())
